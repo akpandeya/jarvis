@@ -1,0 +1,29 @@
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "Personal engineering assistant — tracks work, orchestrates sessions, automates workflows"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.9",
+    "httpx>=0.27",
+    "pydantic-settings>=2",
+    "python-ulid>=2",
+    "keyring>=25",
+    "tomli>=2",
+    "google-api-python-client>=2.0",
+    "google-auth-oauthlib>=1.0",
+]
+
+[project.scripts]
+jarvis = "jarvis.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
