@@ -356,5 +356,17 @@ def status() -> None:
         console.print("  gcal: [yellow]not configured[/yellow]")
 
 
+@app.command()
+def web(
+    port: int = typer.Option(8745, help="Port to run on"),
+    host: str = typer.Option("127.0.0.1", help="Host to bind to"),
+) -> None:
+    """Start the local web dashboard."""
+    import uvicorn
+
+    console.print(f"[bold]Jarvis Dashboard[/bold] at http://{host}:{port}")
+    uvicorn.run("jarvis.web.app:app", host=host, port=port, reload=False)
+
+
 if __name__ == "__main__":
     app()

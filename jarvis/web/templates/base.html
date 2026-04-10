@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Jarvis — {% block title %}Dashboard{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        :root {
+            --pico-font-size: 15px;
+        }
+        nav ul li a.active {
+            font-weight: bold;
+            text-decoration: underline;
+        }
+        .event-row {
+            border-bottom: 1px solid var(--pico-muted-border-color);
+            padding: 0.5rem 0;
+        }
+        .event-meta {
+            font-size: 0.85em;
+            color: var(--pico-muted-color);
+        }
+        .source-badge {
+            display: inline-block;
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 600;
+        }
+        .source-git_local { background: #0e4a6e; color: #7dd3fc; }
+        .source-github { background: #14532d; color: #86efac; }
+        .source-jira { background: #1e3a5f; color: #93c5fd; }
+        .source-gcal { background: #4a1d6e; color: #d8b4fe; }
+        .filters { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; }
+        .filters select, .filters input { margin-bottom: 0; }
+        .loading { text-align: center; padding: 2rem; color: var(--pico-muted-color); }
+        .summary-content { line-height: 1.7; }
+    </style>
+</head>
+<body>
+    <nav class="container">
+        <ul>
+            <li><strong>Jarvis</strong></li>
+        </ul>
+        <ul>
+            <li><a href="/" {% if active == "timeline" %}class="active"{% endif %}>Timeline</a></li>
+            <li><a href="/search" {% if active == "search" %}class="active"{% endif %}>Search</a></li>
+            <li><a href="/summary?kind=standup" {% if active == "summary" %}class="active"{% endif %}>Summary</a></li>
+            <li><a href="/sessions" {% if active == "sessions" %}class="active"{% endif %}>Sessions</a></li>
+        </ul>
+    </nav>
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{% for e in events %}
+<div class="event-row">
+    <div>
+        <span class="source-badge source-{{ e.source }}">{{ e.source }}</span>
+        <strong>{{ e.title[:100] }}</strong>
+    </div>
+    <div class="event-meta">
+        {{ e.happened_at.strftime('%Y-%m-%d %H:%M') }}
+        &middot; {{ e.kind }}
+        {% if e.project %}&middot; {{ e.project }}{% endif %}
+        {% if e.url %}&middot; <a href="{{ e.url }}" target="_blank">link</a>{% endif %}
+    </div>
+</div>
+{% endfor %}
+{% if has_more is defined and has_more %}
+<div hx-get="/?page={{ page + 1 }}&days={{ days }}{% if source %}&source={{ source }}{% endif %}{% if project %}&project={{ project }}{% endif %}"
+     hx-trigger="revealed"
+     hx-swap="outerHTML">
+    <div class="loading">Loading more...</div>
+</div>
+{% endif %}

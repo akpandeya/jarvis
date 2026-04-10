@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% set active = "sessions" %}
+{% block title %}Sessions{% endblock %}
+{% block content %}
+<h2>Sessions</h2>
+
+{% if sessions %}
+{% for s in sessions %}
+<article>
+    <header>
+        <strong>{{ s.started_at[:16] }}</strong>
+        {% if s.project %}<span class="source-badge source-github">{{ s.project }}</span>{% endif %}
+    </header>
+    <p>{{ s.context }}</p>
+</article>
+{% endfor %}
+{% else %}
+<p>No sessions recorded yet. Run <code>jarvis session save</code> to capture one.</p>
+{% endif %}
+{% endblock %}

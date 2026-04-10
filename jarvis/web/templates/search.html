@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% set active = "search" %}
+{% block title %}Search{% endblock %}
+{% block content %}
+<h2>Search</h2>
+
+<form>
+    <input type="search"
+           name="q"
+           value="{{ query }}"
+           placeholder="Search events..."
+           hx-get="/search"
+           hx-trigger="input changed delay:300ms, search"
+           hx-target="#results"
+           hx-push-url="true"
+           autofocus>
+</form>
+
+<div id="results">
+    {% if query %}
+        {% if events %}
+            <p>{{ events|length }} result(s) for "{{ query }}"</p>
+            {% include "_events.html" %}
+        {% else %}
+            <p>No results for "{{ query }}"</p>
+        {% endif %}
+    {% else %}
+        <p class="event-meta">Type to search across all events.</p>
+    {% endif %}
+</div>
+{% endblock %}
