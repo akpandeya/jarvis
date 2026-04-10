@@ -34,11 +34,16 @@ class GCalConfig(BaseModel):
     credentials_path: str = ""  # path to OAuth credentials JSON
 
 
+class KafkaConfig(BaseModel):
+    enabled: bool = True  # parses shell history for hfkcat/kcat commands
+
+
 class JarvisConfig(BaseModel):
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     git_local: GitLocalConfig = Field(default_factory=GitLocalConfig)
     jira: JiraConfig = Field(default_factory=JiraConfig)
     gcal: GCalConfig = Field(default_factory=GCalConfig)
+    kafka: KafkaConfig = Field(default_factory=KafkaConfig)
 
     @classmethod
     def load(cls) -> JarvisConfig:
@@ -73,6 +78,9 @@ project_keys = [
 [gcal]
 calendar_id = "primary"
 credentials_path = ""
+
+[kafka]
+enabled = true  # parses shell history for hfkcat/kcat commands
 
 """
 

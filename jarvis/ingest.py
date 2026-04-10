@@ -12,6 +12,7 @@ from jarvis.integrations.gcal import GCal
 from jarvis.integrations.git_local import GitLocal
 from jarvis.integrations.github import GitHub
 from jarvis.integrations.jira import Jira
+from jarvis.integrations.kafka import Kafka
 
 console = Console()
 
@@ -59,6 +60,9 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
             )
         )
 
+    if config.kafka.enabled and source_filter in (None, "kafka"):
+        integrations.append(Kafka())
+
     for integration in integrations:
         name = integration.name
         if not integration.health_check():
@@ -78,6 +82,13 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
     links = correlate_events(conn)
     if links:
         console.print(f"  [blue]correlated[/blue] {links} event-entity links")
+
+    # Run entity resolution to merge duplicate people
+    from jarvis.resolver import resolve_entities
+
+    merges = resolve_entities(conn)
+    if merges:
+        console.print(f"  [blue]resolved[/blue] {merges} duplicate entities")
 
     conn.close()
     return total

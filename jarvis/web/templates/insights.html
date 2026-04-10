@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% set active = "insights" %}
+{% block title %}Insights{% endblock %}
+{% block content %}
+<h2>Work Patterns</h2>
+
+<form class="filters">
+    <select name="days" id="insight-days"
+            hx-get="/insights"
+            hx-target="#insight-content"
+            hx-include="#insight-days"
+            hx-push-url="true">
+        {% for d in [7, 14, 30, 60, 90] %}
+        <option value="{{ d }}" {% if days == d %}selected{% endif %}>Last {{ d }} days</option>
+        {% endfor %}
+    </select>
+</form>
+
+<div id="insight-content">
+    <div class="insight-grid">
+        <article>
+            <header><strong>Activity by Hour</strong></header>
+            {% if time_of_day %}
+            {% set max_tod = time_of_day.values()|max or 1 %}
+            {% for hour, count in time_of_day.items() %}
+            {% if count > 0 %}
+            <div style="margin: 2px 0;">
+                <span class="event-meta" style="display:inline-block;width:3em;">{{ hour }}</span>
+                <span class="bar" style="width: {{ (count / max_tod * 200)|int }}px;"></span>
+                <span class="event-meta">{{ count }}</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% else %}
+            <p class="event-meta">No data</p>
+            {% endif %}
+        </article>
+
+        <article>
+            <header><strong>Activity by Day</strong></header>
+            {% if day_of_week %}
+            {% set max_dow = day_of_week.values()|max or 1 %}
+            {% for day, count in day_of_week.items() %}
+            <div style="margin: 2px 0;">
+                <span class="event-meta" style="display:inline-block;width:6em;">{{ day }}</span>
+                <span class="bar" style="width: {{ (count / max_dow * 200)|int }}px;"></span>
+                <span class="event-meta">{{ count }}</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="event-meta">No data</p>
+            {% endif %}
+        </article>
+
+        <article>
+            <header><strong>Sources</strong></header>
+            {% if sources %}
+            {% set max_src = sources.values()|max or 1 %}
+            {% for source, count in sources.items() %}
+            <div style="margin: 2px 0;">
+                <span class="source-badge source-{{ source }}">{{ source }}</span>
+                <span class="bar" style="width: {{ (count / max_src * 150)|int }}px;"></span>
+                <span class="event-meta">{{ count }}</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="event-meta">No data</p>
+            {% endif %}
+        </article>
+
+        <article>
+            <header><strong>Projects</strong></header>
+            {% if projects %}
+            {% set max_proj = projects.values()|max or 1 %}
+            {% for proj, count in projects.items() %}
+            <div style="margin: 2px 0;">
+                <span class="event-meta" style="display:inline-block;width:10em;">{{ proj[:20] }}</span>
+                <span class="bar" style="width: {{ (count / max_proj * 150)|int }}px;"></span>
+                <span class="event-meta">{{ count }}</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="event-meta">No data</p>
+            {% endif %}
+        </article>
+
+        <article>
+            <header><strong>Top Collaborators</strong></header>
+            {% if collaborators %}
+            {% for c in collaborators %}
+            <div style="margin: 2px 0;">
+                <span>{{ c.name }}</span>
+                <span class="event-meta">({{ c.events }} events)</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="event-meta">No data</p>
+            {% endif %}
+        </article>
+
+        <article>
+            <header><strong>Context Switching</strong></header>
+            {% if context_switches %}
+            <p>Average <strong>{{ context_switches.avg_per_day }}</strong> switches/day</p>
+            {% for date, count in context_switches.daily.items() %}
+            <div style="margin: 2px 0;">
+                <span class="event-meta" style="display:inline-block;width:7em;">{{ date[5:] }}</span>
+                <span class="bar" style="width: {{ count * 15 }}px;"></span>
+                <span class="event-meta">{{ count }}</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p class="event-meta">No data</p>
+            {% endif %}
+        </article>
+    </div>
+</div>
+{% endblock %}

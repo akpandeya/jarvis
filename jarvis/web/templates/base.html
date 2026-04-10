@@ -33,6 +33,10 @@
         .source-github { background: #14532d; color: #86efac; }
         .source-jira { background: #1e3a5f; color: #93c5fd; }
         .source-gcal { background: #4a1d6e; color: #d8b4fe; }
+        .source-kafka { background: #5b2c0e; color: #fdba74; }
+        .bar { display: inline-block; background: var(--pico-primary); height: 1.2em; border-radius: 2px; vertical-align: middle; }
+        .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+        @media (max-width: 768px) { .insight-grid { grid-template-columns: 1fr; } }
         .filters { display: flex; gap: 1rem; flex-wrap: wrap; align-items: end; }
         .filters select, .filters input { margin-bottom: 0; }
         .loading { text-align: center; padding: 2rem; color: var(--pico-muted-color); }
@@ -49,6 +53,7 @@
             <li><a href="/search" {% if active == "search" %}class="active"{% endif %}>Search</a></li>
             <li><a href="/summary?kind=standup" {% if active == "summary" %}class="active"{% endif %}>Summary</a></li>
             <li><a href="/sessions" {% if active == "sessions" %}class="active"{% endif %}>Sessions</a></li>
+            <li><a href="/insights" {% if active == "insights" %}class="active"{% endif %}>Insights</a></li>
         </ul>
     </nav>
     <main class="container">

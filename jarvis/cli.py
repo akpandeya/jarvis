@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from jarvis.config import CONFIG_PATH, DB_PATH, JarvisConfig, ensure_jarvis_home
+from jarvis.config import CONFIG_PATH, DB_PATH, JARVIS_HOME, JarvisConfig, ensure_jarvis_home
 from jarvis.db import event_count, get_db, init_db, query_events, search_events
 
 app = typer.Typer(help="Jarvis — Personal engineering assistant")
@@ -354,6 +356,179 @@ def status() -> None:
         console.print(f"  gcal: calendar '{config.gcal.calendar_id}'")
     else:
         console.print("  gcal: [yellow]not configured[/yellow]")
+
+    if config.kafka.enabled:
+        console.print("  kafka: enabled (shell history parsing for hfkcat/kcat)")
+    else:
+        console.print("  kafka: [yellow]disabled[/yellow]")
+
+
+@app.command()
+def insights(
+    days: int = typer.Option(30, help="How many days of data to analyze"),
+) -> None:
+    """Show work pattern insights — peak hours, top collaborators, context switching."""
+    from rich.markdown import Markdown
+
+    from jarvis.patterns import generate_insights
+
+    conn = get_db()
+    result = generate_insights(conn, days=days)
+    conn.close()
+    console.print(Markdown(result))
+
+
+@app.command()
+def people(
+    resolve: bool = typer.Option(False, "--resolve", help="Run entity resolution first"),
+) -> None:
+    """List people across all sources (GitHub, Jira, Calendar, Git)."""
+    from jarvis.resolver import list_people, resolve_entities
+
+    conn = get_db()
+    if resolve:
+        merges = resolve_entities(conn)
+        if merges:
+            console.print(f"[blue]Resolved {merges} duplicate entities.[/blue]\n")
+
+    people_list = list_people(conn)
+    conn.close()
+
+    if not people_list:
+        console.print("[yellow]No people found. Run `jarvis ingest` first.[/yellow]")
+        return
+
+    table = Table(title=f"People ({len(people_list)})")
+    table.add_column("Name", no_wrap=False)
+    table.add_column("Aliases", no_wrap=False)
+    table.add_column("Events", justify="right", width=8)
+
+    for p in people_list:
+        aliases = ", ".join(p["aliases"][:3])
+        if len(p["aliases"]) > 3:
+            aliases += f" (+{len(p['aliases']) - 3})"
+        table.add_row(p["name"], aliases or "-", str(p["event_count"]))
+
+    console.print(table)
+
+
+# --- Schedule subcommands ---
+
+schedule_app = typer.Typer(help="Manage automatic ingestion schedule")
+app.add_typer(schedule_app, name="schedule")
+
+
+_PLIST_NAME = "com.jarvis.ingest"
+_PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{_PLIST_NAME}.plist"
+
+
+def _find_jarvis_bin() -> str:
+    """Find the jarvis binary path."""
+    import shutil
+
+    path = shutil.which("jarvis")
+    if path:
+        return path
+    # Fallback: use uv run
+    uv = shutil.which("uv")
+    if uv:
+        return f"{uv} run jarvis"
+    return "jarvis"
+
+
+@schedule_app.command("install")
+def schedule_install(
+    interval: int = typer.Option(900, help="Interval in seconds (default: 900 = 15 min)"),
+) -> None:
+    """Install a launchd agent to run `jarvis ingest` automatically."""
+    jarvis_bin = _find_jarvis_bin()
+
+    # Build the program arguments
+    if " " in jarvis_bin:
+        # uv run jarvis case
+        parts = jarvis_bin.split()
+        program_args = parts + ["ingest", "--days", "1"]
+    else:
+        program_args = [jarvis_bin, "ingest", "--days", "1"]
+
+    log_path = JARVIS_HOME / "ingest.log"
+    local_bin = Path.home() / ".local" / "bin"
+    path_val = f"/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:{local_bin}"
+    args_xml = "".join(f"<string>{a}</string>" for a in program_args)
+
+    plist_content = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{_PLIST_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>{args_xml}</array>
+    <key>StartInterval</key>
+    <integer>{interval}</integer>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path_val}</string>
+    </dict>
+</dict>
+</plist>
+"""
+    _PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _PLIST_PATH.write_text(plist_content)
+
+    import subprocess
+
+    subprocess.run(["launchctl", "unload", str(_PLIST_PATH)], capture_output=True)
+    result = subprocess.run(["launchctl", "load", str(_PLIST_PATH)], capture_output=True, text=True)
+
+    if result.returncode == 0:
+        console.print(f"[green]Installed.[/green] Jarvis will ingest every {interval // 60} min.")
+        console.print(f"  Plist: {_PLIST_PATH}")
+        console.print(f"  Log: {JARVIS_HOME / 'ingest.log'}")
+    else:
+        console.print(f"[red]Failed to load:[/red] {result.stderr}")
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall() -> None:
+    """Remove the automatic ingestion schedule."""
+    import subprocess
+
+    if _PLIST_PATH.exists():
+        subprocess.run(["launchctl", "unload", str(_PLIST_PATH)], capture_output=True)
+        _PLIST_PATH.unlink()
+        console.print("[green]Uninstalled.[/green] Automatic ingestion stopped.")
+    else:
+        console.print("[yellow]No schedule found.[/yellow]")
+
+
+@schedule_app.command("status")
+def schedule_status() -> None:
+    """Check if automatic ingestion is running."""
+    import subprocess
+
+    result = subprocess.run(["launchctl", "list", _PLIST_NAME], capture_output=True, text=True)
+    if result.returncode == 0:
+        console.print(f"[green]Running.[/green] Plist: {_PLIST_PATH}")
+        # Show last ingest log
+        log_path = JARVIS_HOME / "ingest.log"
+        if log_path.exists():
+            lines = log_path.read_text().strip().splitlines()
+            if lines:
+                console.print("\nLast log lines:")
+                for line in lines[-5:]:
+                    console.print(f"  {line}")
+    else:
+        console.print("[yellow]Not running.[/yellow] Install with `jarvis schedule install`.")
 
 
 @app.command()

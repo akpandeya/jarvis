@@ -7,6 +7,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from jarvis.db import event_count, get_db, list_sessions, query_events, search_events
+from jarvis.patterns import (
+    collaboration_frequency,
+    context_switches,
+    day_of_week_distribution,
+    project_distribution,
+    source_distribution,
+    time_of_day_distribution,
+)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -123,6 +131,28 @@ def api_summary(
     html = re.sub(r"(<li>.*</li>)", r"<ul>\1</ul>", html, flags=re.DOTALL)
     html = html.replace("\n\n", "<br><br>")
     return HTMLResponse(html)
+
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(
+    request: Request,
+    days: int = Query(30),
+):
+    conn = get_db()
+    ctx = {
+        "days": days,
+        "time_of_day": time_of_day_distribution(conn, days),
+        "day_of_week": day_of_week_distribution(conn, days),
+        "sources": source_distribution(conn, days),
+        "projects": project_distribution(conn, days),
+        "collaborators": collaboration_frequency(conn, days),
+        "context_switches": context_switches(conn, min(days, 14)),
+    }
+    conn.close()
+
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(request, "insights.html", ctx)
+    return templates.TemplateResponse(request, "insights.html", ctx)
 
 
 @app.get("/sessions", response_class=HTMLResponse)
