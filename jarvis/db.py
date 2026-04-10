@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timedelta
-from importlib import resources
 from pathlib import Path
 
 from ulid import ULID
@@ -52,7 +51,8 @@ def upsert_event(
     event_id = str(ULID())
     meta_json = json.dumps(metadata) if metadata else None
     conn.execute(
-        """INSERT OR IGNORE INTO events (id, source, kind, title, body, metadata, url, happened_at, project)
+        """INSERT OR IGNORE INTO events
+           (id, source, kind, title, body, metadata, url, happened_at, project)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (event_id, source, kind, title, body, meta_json, url, happened_at.isoformat(), project),
     )
@@ -88,9 +88,7 @@ def upsert_entity(
     return entity_id
 
 
-def link_event_entity(
-    conn: sqlite3.Connection, event_id: str, entity_id: str, role: str
-) -> None:
+def link_event_entity(conn: sqlite3.Connection, event_id: str, entity_id: str, role: str) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO event_entities (event_id, entity_id, role) VALUES (?, ?, ?)",
         (event_id, entity_id, role),

@@ -48,8 +48,9 @@ SYSTEM_PROMPTS = {
         "Keep it under 200 words."
     ),
     "query": (
-        "You are a personal engineering assistant answering questions about the user's work history. "
-        "You are given a set of work events as context. Answer the user's question based on these events. "
+        "You are a personal engineering assistant answering questions about "
+        "the user's work history. You are given a set of work events as context. "
+        "Answer the user's question based on these events. "
         "Be specific — reference project names, PR numbers, ticket IDs, and dates. "
         "If the events don't contain enough information to answer, say so."
     ),
@@ -63,9 +64,11 @@ def _call_claude(system_prompt: str, user_message: str) -> str:
 
     result = subprocess.run(
         [
-            "claude", "-p",
+            "claude",
+            "-p",
             "--bare",
-            "--append-system-prompt", system_prompt,
+            "--append-system-prompt",
+            system_prompt,
         ],
         input=user_message,
         capture_output=True,

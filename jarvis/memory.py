@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
 from jarvis.brain import _call_claude, _format_events
 from jarvis.db import get_db, list_sessions, query_events, save_session
 

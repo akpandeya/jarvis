@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
-
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from jarvis.config import DB_PATH, ensure_jarvis_home, JarvisConfig, CONFIG_PATH
+from jarvis.config import CONFIG_PATH, DB_PATH, JarvisConfig, ensure_jarvis_home
 from jarvis.db import event_count, get_db, init_db, query_events, search_events
 
 app = typer.Typer(help="Jarvis — Personal engineering assistant")
@@ -25,13 +22,16 @@ def init() -> None:
     console.print("\nEdit your config to add repos and integrations:")
     console.print(f"  [bold]{CONFIG_PATH}[/bold]")
     console.print("\nStore your GitHub token securely:")
-    console.print('  [bold]python -c "import keyring; keyring.set_password(\'jarvis\', \'github_token\', \'ghp_YOUR_TOKEN\')"[/bold]')
+    console.print(
+        '  [bold]python -c "import keyring; '
+        "keyring.set_password('jarvis', 'github_token', 'ghp_YOUR_TOKEN')\"[/bold]"
+    )
 
 
 @app.command()
 def ingest(
     days: int = typer.Option(7, help="How many days back to fetch"),
-    source: Optional[str] = typer.Option(None, help="Only ingest from this source"),
+    source: str | None = typer.Option(None, help="Only ingest from this source"),
 ) -> None:
     """Pull latest events from all configured integrations."""
     ensure_jarvis_home()
@@ -40,14 +40,15 @@ def ingest(
     console.print(f"[bold]Ingesting events (last {days} days)...[/bold]")
     total = ingest_all(days=days, source_filter=source)
     conn = get_db()
-    console.print(f"\n[green]Done.[/green] {total} events ingested. Total in DB: {event_count(conn)}")
+    total_db = event_count(conn)
+    console.print(f"\n[green]Done.[/green] {total} events ingested. Total in DB: {total_db}")
     conn.close()
 
 
 @app.command()
 def log(
-    source: Optional[str] = typer.Option(None, help="Filter by source (git_local, github)"),
-    project: Optional[str] = typer.Option(None, help="Filter by project name"),
+    source: str | None = typer.Option(None, help="Filter by source (git_local, github)"),
+    project: str | None = typer.Option(None, help="Filter by project name"),
     days: int = typer.Option(7, help="How many days back to show"),
     limit: int = typer.Option(30, help="Max events to show"),
 ) -> None:
@@ -118,7 +119,7 @@ def search(
 @app.command()
 def standup(
     days: int = typer.Option(1, help="How many days back to include"),
-    project: Optional[str] = typer.Option(None, help="Scope to a specific project"),
+    project: str | None = typer.Option(None, help="Scope to a specific project"),
 ) -> None:
     """Generate standup notes from recent activity using Claude."""
     from jarvis.workflows.standup import generate_standup
@@ -136,7 +137,7 @@ def standup(
 
 @app.command()
 def weekly(
-    project: Optional[str] = typer.Option(None, help="Scope to a specific project"),
+    project: str | None = typer.Option(None, help="Scope to a specific project"),
 ) -> None:
     """Generate a weekly summary using Claude."""
     from jarvis.workflows.weekly_summary import generate_weekly
@@ -158,8 +159,9 @@ def ask(
     days: int = typer.Option(14, help="How many days of context to include"),
 ) -> None:
     """Ask a natural language question about your work history."""
-    from jarvis.brain import answer_query
     from rich.markdown import Markdown
+
+    from jarvis.brain import answer_query
 
     conn = get_db()
     events = query_events(conn, days=days, limit=200)
@@ -180,13 +182,14 @@ def ask(
 
 @app.command()
 def context(
-    project: Optional[str] = typer.Option(None, help="Scope to a specific project"),
+    project: str | None = typer.Option(None, help="Scope to a specific project"),
     days: int = typer.Option(2, help="How many days of context to include"),
     raw: bool = typer.Option(False, "--raw", help="Output raw markdown (for piping/hooks)"),
 ) -> None:
     """Show a context briefing — what you've been working on recently."""
-    from jarvis.memory import generate_context
     from rich.markdown import Markdown
+
+    from jarvis.memory import generate_context
 
     if not raw:
         console.print("[bold]Generating context briefing...[/bold]\n")
@@ -209,7 +212,7 @@ app.add_typer(session_app, name="session")
 
 @session_app.command("save")
 def session_save(
-    project: Optional[str] = typer.Option(None, help="Project name"),
+    project: str | None = typer.Option(None, help="Project name"),
     days: int = typer.Option(1, help="How many days to summarize"),
 ) -> None:
     """Capture current work as a session snapshot."""
@@ -229,7 +232,7 @@ def session_save(
 
 @session_app.command("list")
 def session_list(
-    project: Optional[str] = typer.Option(None, help="Filter by project"),
+    project: str | None = typer.Option(None, help="Filter by project"),
     limit: int = typer.Option(10, help="Max sessions to show"),
 ) -> None:
     """List recent session snapshots."""
@@ -260,7 +263,7 @@ def session_list(
 @app.command()
 def remember(
     note: str = typer.Argument(..., help="Note to remember"),
-    project: Optional[str] = typer.Option(None, help="Associate with a project"),
+    project: str | None = typer.Option(None, help="Associate with a project"),
 ) -> None:
     """Manually record a note or context for future reference."""
     from jarvis.memory import remember_note
@@ -275,8 +278,9 @@ def prep(
     days: int = typer.Option(14, help="How many days of context to search"),
 ) -> None:
     """Prepare a briefing for a meeting or topic."""
-    from jarvis.brain import _call_claude, _format_events
     from rich.markdown import Markdown
+
+    from jarvis.brain import _call_claude, _format_events
 
     conn = get_db()
     # Search for events related to the topic
@@ -339,7 +343,10 @@ def status() -> None:
 
     if config.jira.enabled:
         keys = config.jira.project_keys
-        console.print(f"  jira: enabled (via jira-cli) — {len(keys)} project(s)" if keys else "  jira: enabled (via jira-cli, default project)")
+        if keys:
+            console.print(f"  jira: enabled (via jira-cli) — {len(keys)} project(s)")
+        else:
+            console.print("  jira: enabled (via jira-cli, default project)")
     else:
         console.print("  jira: [yellow]disabled[/yellow]")
 

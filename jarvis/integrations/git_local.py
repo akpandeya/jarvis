@@ -4,7 +4,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from jarvis.integrations.base import Integration, RawEvent
+from jarvis.integrations.base import RawEvent
 
 
 class GitLocal:
@@ -31,7 +31,10 @@ class GitLocal:
         try:
             result = subprocess.run(
                 [
-                    "git", "-C", str(repo_path), "log",
+                    "git",
+                    "-C",
+                    str(repo_path),
+                    "log",
                     "--all",
                     f"--since={since_str}",
                     "--format=%H%x00%an%x00%ae%x00%aI%x00%s%x00%b%x1e",

@@ -35,7 +35,9 @@ class Event:
             metadata=json.loads(meta) if meta else None,
             url=row.get("url"),
             happened_at=datetime.fromisoformat(row["happened_at"]),
-            ingested_at=datetime.fromisoformat(row["ingested_at"]) if row.get("ingested_at") else None,
+            ingested_at=(
+                datetime.fromisoformat(row["ingested_at"]) if row.get("ingested_at") else None
+            ),
             project=row.get("project"),
         )
 

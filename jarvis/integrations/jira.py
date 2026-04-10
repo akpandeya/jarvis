@@ -64,9 +64,7 @@ class Jira:
         if not shutil.which("jira"):
             return False
         try:
-            result = subprocess.run(
-                ["jira", "me"], capture_output=True, text=True, timeout=10
-            )
+            result = subprocess.run(["jira", "me"], capture_output=True, text=True, timeout=10)
             return result.returncode == 0 and bool(result.stdout.strip())
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
@@ -92,10 +90,16 @@ class Jira:
         try:
             result = subprocess.run(
                 [
-                    "jira", "issue", "list",
-                    "--jql", jql,
-                    "--plain", "--no-headers", "--no-truncate",
-                    "--columns", "KEY,STATUS,SUMMARY,TYPE,UPDATED",
+                    "jira",
+                    "issue",
+                    "list",
+                    "--jql",
+                    jql,
+                    "--plain",
+                    "--no-headers",
+                    "--no-truncate",
+                    "--columns",
+                    "KEY,STATUS,SUMMARY,TYPE,UPDATED",
                 ],
                 capture_output=True,
                 text=True,

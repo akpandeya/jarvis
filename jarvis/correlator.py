@@ -32,9 +32,7 @@ def correlate_events(conn: sqlite3.Connection | None = None) -> int:
     links_created = 0
 
     # Find all events that contain ticket IDs in their title or body
-    rows = conn.execute(
-        "SELECT id, source, kind, title, body, project FROM events"
-    ).fetchall()
+    rows = conn.execute("SELECT id, source, kind, title, body, project FROM events").fetchall()
 
     # Build a map: ticket_id -> list of event_ids that reference it
     ticket_events: dict[str, list[str]] = {}

@@ -71,7 +71,7 @@ class GitHub:
             kind = "pr_opened" if is_mine else "pr_review_requested"
 
             entities: list[tuple[str, str, str]] = [("person", user, "author")]
-            for reviewer in (pr.get("requested_reviewers") or []):
+            for reviewer in pr.get("requested_reviewers") or []:
                 entities.append(("person", reviewer["login"], "reviewer"))
 
             events.append(
@@ -86,7 +86,7 @@ class GitHub:
                     metadata={
                         "number": pr["number"],
                         "state": pr["state"],
-                        "labels": [l["name"] for l in pr.get("labels", [])],
+                        "labels": [lb["name"] for lb in pr.get("labels", [])],
                         "draft": pr.get("draft", False),
                     },
                     entities=entities,
