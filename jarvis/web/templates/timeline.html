@@ -2,6 +2,28 @@
 {% set active = "timeline" %}
 {% block title %}Timeline{% endblock %}
 {% block content %}
+<div id="suggestions-widget"
+     hx-get="/api/suggestions"
+     hx-trigger="load, every 60s"
+     hx-target="this"
+     hx-swap="innerHTML">
+</div>
+
+<script>
+  document.addEventListener("htmx:afterSwap", function(e) {
+    if (e.target.id !== "suggestions-widget") return;
+    var data = [];
+    try { data = JSON.parse(e.detail.xhr.responseText); } catch(_) { return; }
+    if (!data.length) { e.target.innerHTML = ""; return; }
+    var top = data[0];
+    e.target.innerHTML =
+      '<aside style="border-left:3px solid var(--pico-primary);padding:.5rem 1rem;margin-bottom:1rem;background:var(--pico-card-background-color)">' +
+      '<strong>💡 ' + top.message + '</strong>' +
+      ' &nbsp;<code>' + top.action + '</code>' +
+      '</aside>';
+  });
+</script>
+
 <h2>Timeline <small>({{ total }} events)</small></h2>
 
 <form class="filters" method="get" action="/">

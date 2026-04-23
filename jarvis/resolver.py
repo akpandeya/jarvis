@@ -2,7 +2,7 @@
 
 Matches people by:
 - Exact name match (case-insensitive)
-- Email prefix == GitHub username (e.g., apandeya@corp.com ↔ apandeya)
+- Email prefix == GitHub username (e.g., jsmith@corp.com ↔ jsmith)
 - Known alias mappings from entities table
 - Git author email matching Jira login
 
