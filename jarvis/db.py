@@ -34,7 +34,10 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 def init_db(db_path: Path | None = None) -> None:
     """Run all migrations in order."""
     conn = _connect(db_path)
-    migrations_dir = Path(__file__).parent.parent / "migrations"
+    # Prefer bundled migrations (works in wheel installs); fall back to repo root
+    pkg_migrations = Path(__file__).parent / "migrations"
+    repo_migrations = Path(__file__).parent.parent / "migrations"
+    migrations_dir = pkg_migrations if pkg_migrations.exists() else repo_migrations
     for migration in sorted(migrations_dir.glob("*.sql")):
         conn.executescript(migration.read_text())
     conn.close()
