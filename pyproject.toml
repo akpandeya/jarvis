@@ -39,3 +39,6 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "spec: links a test to a behaviour ID in docs/specs/ (e.g. @pytest.mark.spec('suggestions_engine.F2'))",
+]
