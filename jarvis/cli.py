@@ -16,8 +16,21 @@ app = typer.Typer(help="Jarvis — Personal engineering assistant", invoke_witho
 console = Console()
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        import jarvis
+
+        print(jarvis.__version__)
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
-def default(ctx: typer.Context) -> None:
+def default(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        None, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."
+    ),
+) -> None:
     """Start Jarvis: menu bar icon + web dashboard (non-blocking)."""
     if ctx.invoked_subcommand is not None:
         return

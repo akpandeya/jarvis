@@ -16,6 +16,6 @@ if _git_dir.exists():
             stderr=_subprocess.DEVNULL,
             text=True,
         ).strip()
-        __version__ = f"0.2.0-dev+{_sha}"
+        __version__ = f"{__version__}-dev+{_sha}"
     except Exception:
         pass
