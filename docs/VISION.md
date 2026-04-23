@@ -23,7 +23,7 @@ It watches your computer — git commits, Jira tickets, calendar events, emails,
 | Source | What it ingests | How |
 |---|---|---|
 | Git (local) | Commits across all your repos | `git log` |
-| GitHub | PRs, reviews, CI | REST API |
+| GitHub | PRs, reviews, CI status — across all configured accounts | REST API (per profile token) |
 | Jira | Ticket updates, status changes | `jira` CLI |
 | Google Calendar | Events, attendees | Calendar API |
 | Shell history | Commands run (`~/.zsh_history`) | File read |
@@ -44,8 +44,12 @@ Rules (no LLM):
 - Meeting in < 30min with attendees → `jarvis prep`
 - Last session save > 4h, many events since → `jarvis session save`
 - 3+ project switches in 2h → `jarvis context`
+- PR with CI failure → alert with failing check name (no LLM)
+- PR with new review comments → LLM summarises the comments concisely
+- PR approved and all checks green → auto-merges (or prompts if branch protection blocks it)
+- PR deployed to staging → asks whether to promote to production, once per PR, across all configured GitHub profiles
 
-LLM is called only when a rule needs prose generation (e.g., meeting prep brief), and the result is cached.
+LLM is called only when a rule needs prose generation (e.g., meeting prep brief, review comment summary), and the result is cached.
 
 ### Next — Self-Evolution Tracker
 Jarvis scores its own feature backlog against your usage data (`command_frequency`, `top_urls`, `recent_emails`). It re-ranks what to build next and can scaffold a new feature as a spec + PR for your review.
@@ -59,6 +63,7 @@ Auto-update: once a PR merges, `jarvis update` pulls and reinstalls.
 - **Android integration**: Jarvis REST API on localhost, queried via Tasker/Termux from your phone
 - **Local embeddings**: `sqlite-vec` + sentence-transformers for semantic search without LLM calls
 - **Fully autonomous evolution**: Jarvis writes, tests, and proposes its own code changes based on usage signals
+- **PR monitor** (scheduled every 2h via launchd): polls all open PRs across all configured GitHub accounts; fires deterministic rules for CI failures and staging deploys; calls LLM only for review comment summaries
 
 ---
 

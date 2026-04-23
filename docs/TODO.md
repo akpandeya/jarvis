@@ -28,6 +28,22 @@ Prioritised feature backlog. Re-ranked by `jarvis evolve` based on actual usage.
 
 ---
 
+## Next (continued) — PR Monitor
+
+Scheduled every 2h via launchd. Polls all open PRs across all configured GitHub accounts.
+
+- [ ] **SDD: Write `docs/specs/pr_monitor.md`** — behaviours for CI failure alert, review comment summary, auto-merge, staging→production prompt
+- [ ] **`jarvis/pr_monitor.py`** — deterministic rules engine over GitHub PR state
+  - CI failure → surface failing check name + link (no LLM)
+  - New review comments since last check → LLM summarises them concisely (cached per PR+comment hash)
+  - Approved + all checks green → auto-merge OR prompt if branch protection blocks
+  - Deployed to staging → one-shot prompt to promote to production
+- [ ] **Multi-account support** — iterate over all `gh` authenticated profiles; honour per-account token
+- [ ] **`jarvis pr-status`** — on-demand CLI view of all open PRs with their state
+- [ ] **Wire into launchd scheduler** — `jarvis pr-monitor --run` called every 2h alongside ingest
+
+---
+
 ## Later — Phase 8+
 
 - [ ] **Android integration** — FastAPI `/api/v1/` with bearer token auth; Tasker/Termux on Android
