@@ -51,7 +51,7 @@ def main() -> None:
                 pending = get_pending(conn)
                 conn.close()
                 n = len(pending)
-                self.title = f"J ({n})" if n else "J"
+                self.title = "J ●" if n else "J"
             except Exception:
                 pass
 
@@ -117,6 +117,9 @@ def main() -> None:
             global _SERVER_PROCESS
             if _SERVER_PROCESS and _SERVER_PROCESS.poll() is None:
                 _SERVER_PROCESS.terminate()
+            from jarvis.launcher import clear_pid
+
+            clear_pid()
             rumps.quit_application()
 
     JarvisApp().run()

@@ -55,14 +55,16 @@ def _no_standup(conn: sqlite3.Connection) -> Suggestion | None:
 def _stale_ingest(conn: sqlite3.Connection) -> Suggestion | None:
     row = conn.execute("SELECT MAX(happened_at) as latest FROM events").fetchone()
     if not row or not row["latest"]:
-        return Suggestion(
-            rule_id="stale_ingest",
-            message="No events ingested yet",
-            action="jarvis ingest",
-            priority=70,
-        )
-    latest = datetime.fromisoformat(row["latest"])
-    if datetime.now() - latest > timedelta(hours=2):
+        return None  # no events yet — don't nag on first install
+    latest_str = row["latest"]
+    # Stored as UTC ISO string — ensure timezone-aware comparison
+    latest = datetime.fromisoformat(latest_str)
+    if latest.tzinfo is None:
+        from datetime import UTC
+
+        latest = latest.replace(tzinfo=UTC)
+    now = datetime.now(latest.tzinfo)
+    if now - latest > timedelta(hours=2):
         return Suggestion(
             rule_id="stale_ingest",
             message="Activity not ingested in the last 2 hours",

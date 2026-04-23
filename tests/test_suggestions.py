@@ -37,13 +37,33 @@ def _insert_event(db, project=None, source="github", happened_at=None):
 
 @pytest.mark.spec("suggestions_engine.F1")
 def test_evaluate_all_returns_count(db):
-    # stale_ingest fires because there are no events
+    import uuid
+
+    # Insert a stale event so stale_ingest fires
+    upsert_event(
+        db,
+        source="github",
+        kind="commit",
+        title="old",
+        happened_at=datetime.now(UTC) - timedelta(hours=3),
+        url=str(uuid.uuid4()),
+    )
     fired = evaluate_all(db)
     assert fired >= 1
 
 
 @pytest.mark.spec("suggestions_engine.F1")
 def test_evaluate_all_upserts_suggestions(db):
+    import uuid
+
+    upsert_event(
+        db,
+        source="github",
+        kind="commit",
+        title="old",
+        happened_at=datetime.now(UTC) - timedelta(hours=3),
+        url=str(uuid.uuid4()),
+    )
     evaluate_all(db)
     rows = db.execute("SELECT * FROM suggestions").fetchall()
     assert len(rows) >= 1
@@ -68,19 +88,19 @@ def test_evaluate_all_does_not_raise_on_rule_exception(db, monkeypatch):
 
 
 @pytest.mark.spec("suggestions_engine.F4")
-def test_stale_ingest_fires_when_no_events(db):
+def test_stale_ingest_silent_when_no_events(db):
     from jarvis.suggestions import _stale_ingest
 
+    # No events on first install — should not nag
     suggestion = _stale_ingest(db)
-    assert suggestion is not None
-    assert suggestion.rule_id == "stale_ingest"
+    assert suggestion is None
 
 
 @pytest.mark.spec("suggestions_engine.F4")
 def test_stale_ingest_fires_when_last_event_old(db):
     from jarvis.suggestions import _stale_ingest
 
-    old = _naive_now() - timedelta(hours=3)
+    old = _now() - timedelta(hours=3)
     _insert_event(db, happened_at=old)
     suggestion = _stale_ingest(db)
     assert suggestion is not None
