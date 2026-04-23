@@ -779,5 +779,21 @@ def web(
     uvicorn.run("jarvis.web.app:app", host=host, port=port, reload=False)
 
 
+@app.command()
+def install() -> None:
+    """Interactive first-run setup wizard."""
+    from jarvis.installer import run_install
+
+    run_install()
+
+
+@app.command()
+def menubar() -> None:
+    """Start the macOS menu bar tray icon."""
+    from jarvis.menubar import main
+
+    main()
+
+
 if __name__ == "__main__":
     app()

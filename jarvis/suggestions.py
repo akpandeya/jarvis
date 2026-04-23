@@ -137,7 +137,47 @@ def _context_drift(conn: sqlite3.Connection) -> Suggestion | None:
     return None
 
 
-_RULES = [_no_standup, _stale_ingest, _meeting_soon, _unsaved_session, _context_drift]
+def _update_available(conn: sqlite3.Connection) -> Suggestion | None:
+    now = datetime.now()
+    if not (8 <= now.hour < 9):
+        return None
+    today = now.date().isoformat()
+    # Fire at most once per day
+    row = conn.execute(
+        "SELECT id FROM suggestions WHERE rule_id='update_available' "
+        "AND created_at >= ? AND dismissed=0",
+        (today,),
+    ).fetchone()
+    if row:
+        return None
+    try:
+        from jarvis import __version__
+        from jarvis.updater import get_latest_version, update_available
+
+        if not update_available():
+            return None
+        latest = get_latest_version()
+        return Suggestion(
+            rule_id="update_available",
+            message=f"Jarvis {latest} is available (installed: {__version__})",
+            action=(
+                "curl -sSf https://raw.githubusercontent.com/akpandeya/jarvis/main"
+                "/scripts/bootstrap.sh | bash"
+            ),
+            priority=70,
+        )
+    except Exception:
+        return None
+
+
+_RULES = [
+    _no_standup,
+    _stale_ingest,
+    _meeting_soon,
+    _unsaved_session,
+    _context_drift,
+    _update_available,
+]
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 [project]
 name = "jarvis"
-version = "0.1.0"
+version = "0.2.0"
 description = "Personal engineering assistant — tracks work, orchestrates sessions, automates workflows"
 requires-python = ">=3.12"
 dependencies = [
@@ -15,10 +15,12 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.32",
     "jinja2>=3.1",
+    "rumps>=0.4; sys_platform == 'darwin'",
 ]
 
 [project.scripts]
 jarvis = "jarvis.cli:app"
+jarvis-menubar = "jarvis.menubar:main"
 
 [build-system]
 requires = ["hatchling"]

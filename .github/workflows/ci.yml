@@ -25,5 +25,14 @@ jobs:
       - name: Format check
         run: uv run ruff format --check .
 
+      - name: Version consistency
+        run: |
+          TOML_VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          PKG_VER=$(uv run python -c "import jarvis; print(jarvis.__version__)")
+          if [ "$TOML_VER" != "$PKG_VER" ]; then
+            echo "Version mismatch: pyproject.toml=$TOML_VER jarvis/__init__.py=$PKG_VER"
+            exit 1
+          fi
+
       - name: Tests
         run: uv run pytest -v
