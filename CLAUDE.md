@@ -44,6 +44,7 @@ All new modules must have a spec in `docs/specs/` before code is written. Read `
 
 - Format: YAML frontmatter (`name`/`description`/`component`) + flat `F<n>` behaviour list in EARS style (`WHEN … THEN … SHALL …`)
 - Spec is source of truth — if code and spec disagree, the code is the bug
+- Write behaviours in plain English — no function signatures, parameter names, or code syntax in behaviour text. The tagged test carries the implementation detail.
 - Tag tests: `@pytest.mark.spec("module_name.F<n>")`
 - New post-bootstrap behaviours carry a GitHub issue ref `(#<n>)`
 - Spec discovery: `grep -l "^component:" docs/specs/*.md`
