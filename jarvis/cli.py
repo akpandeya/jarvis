@@ -820,10 +820,18 @@ def update() -> None:
 
     from jarvis.launcher import _already_running, quit_jarvis
 
-    # Find repo root (two levels up from this file)
-    repo = Path(__file__).parent.parent
+    # Find repo root: stored at ~/.jarvis/repo_path by `make install`
+    repo_path_file = JARVIS_HOME / "repo_path"
+    if repo_path_file.exists():
+        repo = Path(repo_path_file.read_text().strip())
+    else:
+        # Fallback for editable installs (dev only)
+        repo = Path(__file__).parent.parent
     if not (repo / "pyproject.toml").exists():
-        console.print("[red]Cannot find repo root — run `make install` manually.[/red]")
+        console.print(
+            "[red]Cannot find repo root.[/red] "
+            "Run [bold]make install[/bold] from the jarvis repo to register its path."
+        )
         raise typer.Exit(1)
 
     was_running = _already_running()
