@@ -12,7 +12,7 @@ def test_install_launchd_agents_writes_three_plists(tmp_path, monkeypatch):
     agents_dir.mkdir()
     monkeypatch.setattr(
         "jarvis.installer._write_plist",
-        lambda label, args_xml, extra, log: (agents_dir / f"{label}.plist").write_text(
+        lambda label, args_xml, extra, log, **kw: (agents_dir / f"{label}.plist").write_text(
             f"{label}\n{args_xml}"
         ),
     )

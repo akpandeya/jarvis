@@ -818,6 +818,14 @@ def menubar() -> None:
     main()
 
 
+@app.command("pr-monitor")
+def pr_monitor() -> None:
+    """Check open PRs: explain CI failures, summarise reviews, auto-merge when green."""
+    from jarvis.pr_monitor import run_pr_monitor
+
+    run_pr_monitor()
+
+
 @app.command()
 def quit() -> None:
     """Stop the running Jarvis menu bar process."""

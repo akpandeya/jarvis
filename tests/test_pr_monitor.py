@@ -1,364 +1,318 @@
 """Tests for jarvis/pr_monitor.py — keyed to docs/specs/pr_monitor.md."""
 
-from datetime import UTC, datetime, timedelta
+from __future__ import annotations
+
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from jarvis.pr_monitor import (
-    _check_ci_failure,
     _check_pr_size,
-    _check_ready_to_merge,
-    _check_review_comments,
-    _check_staging_deploy,
-    _get_cache,
-    _set_cache,
+    _ci_cache_key,
+    _comments_cache_key,
+    _explain_ci_failure,
+    _maybe_automerge,
+    _run_monitor,
     _sha,
-    list_open_prs,
-    run_monitor,
+    _summarise_review_comments,
+    run_pr_monitor,
 )
 
+# ---------------------------------------------------------------------------
+# Fixtures / helpers
+# ---------------------------------------------------------------------------
 
-def _pr(number=1, title="Fix thing", draft=False, changed_files=3, additions=50, deletions=20):
+
+def _pr(
+    number: int = 1,
+    title: str = "Fix thing",
+    is_draft: bool = False,
+    review_decision: str = "APPROVED",
+    changed_files: int = 3,
+    status_rollup: list | None = None,
+) -> dict:
     return {
         "number": number,
         "title": title,
-        "draft": draft,
-        "head": {"sha": "abc123"},
-        "changed_files": changed_files,
-        "additions": additions,
-        "deletions": deletions,
-        "html_url": f"https://github.com/owner/repo/pull/{number}",
-        "user": {"login": "author"},
+        "isDraft": is_draft,
+        "reviewDecision": review_decision,
+        "changedFiles": changed_files,
+        "statusCheckRollup": status_rollup or [],
+        "headRefName": "feat/my-branch",
+    }
+
+
+def _completed_success() -> dict:
+    return {
+        "__typename": "CheckRun",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS",
+        "databaseId": 99,
+    }
+
+
+def _completed_failure(run_id: int = 42) -> dict:
+    return {
+        "__typename": "CheckRun",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE",
+        "databaseId": run_id,
     }
 
 
 # ---------------------------------------------------------------------------
-# Cache helpers
+# Helpers
 # ---------------------------------------------------------------------------
-
-
-def test_cache_round_trip(db):
-    _set_cache(db, "ci_diagnosis", "deadbeef", "the diagnosis")
-    result = _get_cache(db, "ci_diagnosis", "deadbeef")
-    assert result == "the diagnosis"
-
-
-def test_cache_miss_returns_none(db):
-    assert _get_cache(db, "ci_diagnosis", "notexist") is None
 
 
 def test_sha_returns_16_chars():
     assert len(_sha("hello")) == 16
 
 
-# ---------------------------------------------------------------------------
-# F2 + F8: CI failure signal with LLM caching
-# ---------------------------------------------------------------------------
+def test_ci_cache_key_format():
+    assert _ci_cache_key("123") == "pr_ci_explained:123"
 
 
-@pytest.mark.spec("pr_monitor.F2")
-def test_check_ci_failure_returns_suggestion_on_failure(db):
-    check_runs = {"check_runs": [{"id": 1, "name": "unit-tests", "conclusion": "failure"}]}
-    jobs = {"jobs": [{"id": 10, "name": "unit-tests", "conclusion": "failure", "steps": []}]}
-
-    with (
-        patch("jarvis.pr_monitor._get") as mock_get,
-        patch("jarvis.pr_monitor._call_claude", return_value="root cause here"),
-        patch("httpx.get") as mock_http,
-    ):
-        mock_get.side_effect = lambda url, token, **kw: check_runs if "check-runs" in url else jobs
-        mock_http.return_value = MagicMock(text="build failed: ImportError")
-        result = _check_ci_failure(db, "owner/repo", _pr(), "tok")
-
-    assert result is not None
-    assert "unit-tests" in result.message
-    assert result.priority == 90
-
-
-@pytest.mark.spec("pr_monitor.F2")
-def test_check_ci_failure_returns_none_when_no_failure(db):
-    check_runs = {"check_runs": [{"id": 1, "name": "unit-tests", "conclusion": "success"}]}
-    with patch("jarvis.pr_monitor._get", return_value=check_runs):
-        result = _check_ci_failure(db, "owner/repo", _pr(), "tok")
-    assert result is None
-
-
-@pytest.mark.spec("pr_monitor.F8")
-def test_check_ci_failure_uses_cache(db):
-    check_runs = {"check_runs": [{"id": 1, "name": "tests", "conclusion": "failure"}]}
-    jobs = {"jobs": [{"id": 10, "name": "tests", "conclusion": "failure", "steps": []}]}
-
-    with (
-        patch("jarvis.pr_monitor._get") as mock_get,
-        patch("jarvis.pr_monitor._call_claude", return_value="diagnosis") as mock_llm,
-        patch("httpx.get") as mock_http,
-    ):
-        mock_get.side_effect = lambda url, token, **kw: check_runs if "check-runs" in url else jobs
-        mock_http.return_value = MagicMock(text="error log")
-        _check_ci_failure(db, "owner/repo", _pr(), "tok")
-        _check_ci_failure(db, "owner/repo", _pr(), "tok")
-
-    assert mock_llm.call_count == 1
+def test_comments_cache_key_format():
+    assert _comments_cache_key(7) == "pr_comments_hash:7"
 
 
 # ---------------------------------------------------------------------------
-# F3: suggestion action is jarvis pr-fix
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.spec("pr_monitor.F3")
-def test_ci_failure_action_is_pr_fix(db):
-    check_runs = {"check_runs": [{"id": 1, "name": "ci", "conclusion": "failure"}]}
-    jobs = {"jobs": [{"id": 10, "name": "ci", "conclusion": "failure", "steps": []}]}
-
-    with (
-        patch("jarvis.pr_monitor._get") as mock_get,
-        patch("jarvis.pr_monitor._call_claude", return_value="fix suggestion"),
-        patch("httpx.get") as mock_http,
-    ):
-        mock_get.side_effect = lambda url, token, **kw: check_runs if "check-runs" in url else jobs
-        mock_http.return_value = MagicMock(text="log")
-        result = _check_ci_failure(db, "owner/repo", _pr(number=42), "tok")
-
-    assert result is not None
-    assert "pr-fix" in result.action
-    assert "42" in result.action
-
-
-# ---------------------------------------------------------------------------
-# F4 + F8: review comments signal with LLM caching
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.spec("pr_monitor.F4")
-def test_check_review_comments_new_comments_returns_suggestion(db):
-    now = datetime.now(UTC)
-    comments = [
-        {
-            "user": {"login": "reviewer"},
-            "path": "src/foo.py",
-            "line": 10,
-            "body": "This needs a test",
-            "created_at": now.isoformat().replace("+00:00", "Z"),
-        }
-    ]
-    with (
-        patch("jarvis.pr_monitor._get", return_value=comments),
-        patch("jarvis.pr_monitor._call_claude", return_value="summary"),
-    ):
-        result = _check_review_comments(db, "owner/repo", _pr(), "tok")
-
-    assert result is not None
-    assert result.priority == 80
-
-
-@pytest.mark.spec("pr_monitor.F4")
-def test_check_review_comments_old_comments_returns_none(db):
-    old_time = (datetime.now(UTC) - timedelta(days=2)).isoformat().replace("+00:00", "Z")
-    comments = [
-        {
-            "user": {"login": "reviewer"},
-            "path": "src/foo.py",
-            "line": 10,
-            "body": "Old comment",
-            "created_at": old_time,
-        }
-    ]
-    with patch("jarvis.pr_monitor._get", return_value=comments):
-        result = _check_review_comments(db, "owner/repo", _pr(), "tok")
-    assert result is None
-
-
-@pytest.mark.spec("pr_monitor.F8")
-def test_check_review_comments_cached(db):
-    now = datetime.now(UTC)
-    comments = [
-        {
-            "user": {"login": "reviewer"},
-            "path": "foo.py",
-            "line": 1,
-            "body": "Cached comment",
-            "created_at": now.isoformat().replace("+00:00", "Z"),
-        }
-    ]
-    with (
-        patch("jarvis.pr_monitor._get", return_value=comments),
-        patch("jarvis.pr_monitor._call_claude", return_value="cached summary") as mock_llm,
-    ):
-        _check_review_comments(db, "owner/repo", _pr(), "tok")
-        _check_review_comments(db, "owner/repo", _pr(), "tok")
-
-    assert mock_llm.call_count == 1
-
-
-# ---------------------------------------------------------------------------
-# F5: ready to merge
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.spec("pr_monitor.F5")
-def test_check_ready_to_merge_approved_and_green(db):
-    reviews = [{"user": {"login": "reviewer"}, "state": "APPROVED"}]
-    check_runs = {"check_runs": [{"conclusion": "success"}]}
-
-    def fake_get(url, token, **kw):
-        if "reviews" in url:
-            return reviews
-        if "check-runs" in url:
-            return check_runs
-        return None
-
-    with patch("jarvis.pr_monitor._get", side_effect=fake_get):
-        result = _check_ready_to_merge(db, "owner/repo", _pr(), "tok")
-
-    assert result is not None
-    assert result.priority == 85
-    assert "merge" in result.action
-
-
-@pytest.mark.spec("pr_monitor.F5")
-def test_check_ready_to_merge_not_all_approved_returns_none(db):
-    reviews = [
-        {"user": {"login": "r1"}, "state": "APPROVED"},
-        {"user": {"login": "r2"}, "state": "CHANGES_REQUESTED"},
-    ]
-    with patch("jarvis.pr_monitor._get", return_value=reviews):
-        result = _check_ready_to_merge(db, "owner/repo", _pr(), "tok")
-    assert result is None
-
-
-@pytest.mark.spec("pr_monitor.F5")
-def test_check_ready_to_merge_draft_returns_none(db):
-    result = _check_ready_to_merge(db, "owner/repo", _pr(draft=True), "tok")
-    assert result is None
-
-
-# ---------------------------------------------------------------------------
-# F6 + F12: oversized PR
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.spec("pr_monitor.F6")
-def test_check_pr_size_oversized_returns_suggestion(db):
-    big_pr = _pr(changed_files=15, additions=300, deletions=300)
-    with (
-        patch("httpx.get") as mock_http,
-        patch("jarvis.pr_monitor._call_claude", return_value="split into 3 PRs"),
-    ):
-        mock_http.return_value = MagicMock(text="diff content")
-        result = _check_pr_size(db, "owner/repo", big_pr, "tok", max_files=10, max_lines=500)
-
-    assert result is not None
-    assert "15 files" in result.message
-
-
-@pytest.mark.spec("pr_monitor.F12")
-def test_check_pr_size_within_defaults_returns_none(db):
-    small_pr = _pr(changed_files=3, additions=100, deletions=50)
-    result = _check_pr_size(db, "owner/repo", small_pr, "tok")
-    assert result is None
-
-
-@pytest.mark.spec("pr_monitor.F12")
-def test_default_thresholds_are_10_files_500_lines(db):
-    from jarvis.pr_monitor import _DEFAULT_MAX_FILES, _DEFAULT_MAX_LINES
-
-    assert _DEFAULT_MAX_FILES == 10
-    assert _DEFAULT_MAX_LINES == 500
-
-
-# ---------------------------------------------------------------------------
-# F7: staging deploy
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.spec("pr_monitor.F7")
-def test_check_staging_deploy_returns_suggestion(db):
-    deployments = [{"id": 1, "environment": "staging-eu"}]
-    with patch("jarvis.pr_monitor._get", return_value=deployments):
-        result = _check_staging_deploy(db, "owner/repo", _pr(), "tok")
-
-    assert result is not None
-    assert "staging" in result.message.lower()
-    assert result.priority == 75
-
-
-@pytest.mark.spec("pr_monitor.F7")
-def test_check_staging_deploy_one_shot(db):
-    deployments = [{"id": 99, "environment": "staging"}]
-    with patch("jarvis.pr_monitor._get", return_value=deployments):
-        first = _check_staging_deploy(db, "owner/repo", _pr(), "tok")
-        # Mark it as promoted
-        _set_cache(db, "staging_promoted", "99", "1")
-        second = _check_staging_deploy(db, "owner/repo", _pr(), "tok")
-
-    assert first is not None
-    assert second is None
-
-
-# ---------------------------------------------------------------------------
-# F1 + F9: run_monitor iterates accounts and records activity
+# F1: iterates all configured repos
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.spec("pr_monitor.F1")
-def test_run_monitor_skips_missing_token(db, monkeypatch):
-    import keyring
+def test_run_monitor_iterates_all_repos(db):
+    """_run_monitor calls gh pr list for every repo in the list."""
+    repos = ["owner/repo-a", "owner/repo-b"]
 
-    monkeypatch.setattr(keyring, "get_password", lambda *a: None)
-    counts = run_monitor(db, account_keys=["missing_key"])
-    assert counts["prs_checked"] == 0
+    def fake_gh_json(*args):
+        # Return a single PR for each repo
+        if "pr" in args and "list" in args:
+            return [_pr(number=1)]
+        return None
+
+    with (
+        patch("jarvis.pr_monitor._gh_json", side_effect=fake_gh_json) as mock_json,
+        patch("jarvis.pr_monitor._explain_ci_failure"),
+        patch("jarvis.pr_monitor._summarise_review_comments"),
+        patch("jarvis.pr_monitor._maybe_automerge"),
+        patch("jarvis.pr_monitor._check_pr_size"),
+    ):
+        _run_monitor(db, repos)
+
+    # Two calls to gh pr list — one per repo
+    list_calls = [c for c in mock_json.call_args_list if "list" in c.args]
+    assert len(list_calls) == 2
+    repos_called = [c.args[c.args.index("--repo") + 1] for c in list_calls]
+    assert set(repos_called) == set(repos)
+
+
+# ---------------------------------------------------------------------------
+# F2: CI failure → LLM explanation → post comment (cached per run_id)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.spec("pr_monitor.F2")
+def test_explain_ci_failure_posts_comment(db):
+    """Posts a PR comment when a CI check fails."""
+    pr = _pr(status_rollup=[_completed_failure(run_id=42)])
+
+    with (
+        patch("jarvis.pr_monitor._gh") as mock_gh,
+        patch("jarvis.pr_monitor._call_claude", return_value="root cause") as mock_llm,
+    ):
+        # First call: gh run view (log); second call: gh pr comment
+        mock_gh.return_value = MagicMock(returncode=0, stdout="build failed\nerror here")
+        _explain_ci_failure(db, "owner/repo", pr)
+
+    # LLM was called once
+    assert mock_llm.call_count == 1
+    # gh pr comment was invoked — args are positional strings, e.g. ("pr", "comment", ...)
+    comment_calls = [c for c in mock_gh.call_args_list if "comment" in c.args]
+    assert len(comment_calls) == 1
+
+
+@pytest.mark.spec("pr_monitor.F2")
+def test_explain_ci_failure_skips_when_no_failure(db):
+    """Does nothing when there are no failing checks."""
+    pr = _pr(status_rollup=[_completed_success()])
+
+    with (
+        patch("jarvis.pr_monitor._gh") as mock_gh,
+        patch("jarvis.pr_monitor._call_claude") as mock_llm,
+    ):
+        _explain_ci_failure(db, "owner/repo", pr)
+
+    mock_llm.assert_not_called()
+    mock_gh.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# F2 + F7 + F10: second run does NOT re-comment (idempotent, cached)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.spec("pr_monitor.F2")
+@pytest.mark.spec("pr_monitor.F7")
+@pytest.mark.spec("pr_monitor.F10")
+def test_explain_ci_failure_idempotent_cached(db):
+    """Second run with same run_id skips LLM call and comment."""
+    pr = _pr(status_rollup=[_completed_failure(run_id=55)])
+
+    with (
+        patch("jarvis.pr_monitor._gh") as mock_gh,
+        patch("jarvis.pr_monitor._call_claude", return_value="explanation") as mock_llm,
+    ):
+        mock_gh.return_value = MagicMock(returncode=0, stdout="error log")
+        _explain_ci_failure(db, "owner/repo", pr)
+        # Second call — cache hit expected
+        _explain_ci_failure(db, "owner/repo", pr)
+
+    # LLM called only once
+    assert mock_llm.call_count == 1
+    # Comment posted only once — args are positional strings, e.g. ("pr", "comment", ...)
+    comment_calls = [c for c in mock_gh.call_args_list if "comment" in c.args]
+    assert len(comment_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# F4: auto-merge when approved + all CI green
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.spec("pr_monitor.F4")
+def test_maybe_automerge_approved_and_green(db):
+    """Calls gh pr merge --squash when PR is approved and all checks pass."""
+    pr = _pr(
+        number=7,
+        review_decision="APPROVED",
+        is_draft=False,
+        status_rollup=[_completed_success()],
+    )
+
+    with patch("jarvis.pr_monitor._gh") as mock_gh:
+        mock_gh.return_value = MagicMock(returncode=0)
+        merged = _maybe_automerge(db, "owner/repo", pr)
+
+    assert merged is True
+    # args are positional strings, e.g. ("pr", "merge", "7", "--repo", ..., "--squash")
+    merge_calls = [c for c in mock_gh.call_args_list if "merge" in c.args]
+    assert len(merge_calls) == 1
+    assert "--squash" in merge_calls[0].args
+    assert "7" in merge_calls[0].args
+
+
+@pytest.mark.spec("pr_monitor.F4")
+def test_maybe_automerge_skips_draft(db):
+    pr = _pr(is_draft=True, review_decision="APPROVED", status_rollup=[_completed_success()])
+    with patch("jarvis.pr_monitor._gh") as mock_gh:
+        merged = _maybe_automerge(db, "owner/repo", pr)
+    assert merged is False
+    mock_gh.assert_not_called()
+
+
+@pytest.mark.spec("pr_monitor.F4")
+def test_maybe_automerge_skips_not_approved(db):
+    pr = _pr(review_decision="REVIEW_REQUIRED", status_rollup=[_completed_success()])
+    with patch("jarvis.pr_monitor._gh") as mock_gh:
+        merged = _maybe_automerge(db, "owner/repo", pr)
+    assert merged is False
+    mock_gh.assert_not_called()
+
+
+@pytest.mark.spec("pr_monitor.F4")
+def test_maybe_automerge_skips_failing_ci(db):
+    pr = _pr(
+        review_decision="APPROVED",
+        status_rollup=[_completed_failure()],
+    )
+    with patch("jarvis.pr_monitor._gh") as mock_gh:
+        merged = _maybe_automerge(db, "owner/repo", pr)
+    assert merged is False
+    mock_gh.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# F5: oversized PR — deterministic, no LLM
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.spec("pr_monitor.F5")
+def test_check_pr_size_flags_oversized(db):
+    """Surfaces a suggestion for PRs with too many changed files (no LLM)."""
+    big_pr = _pr(number=10, changed_files=25)
+
+    with patch("jarvis.pr_monitor._call_claude") as mock_llm:
+        _check_pr_size(db, "owner/repo", big_pr, max_files=20)
+
+    mock_llm.assert_not_called()
+    row = db.execute("SELECT * FROM suggestions WHERE rule_id='pr_too_large_10'").fetchone()
+    assert row is not None
+    assert "25" in row["message"]
+
+
+@pytest.mark.spec("pr_monitor.F5")
+def test_check_pr_size_skips_small_pr(db):
+    small_pr = _pr(changed_files=5)
+    _check_pr_size(db, "owner/repo", small_pr, max_files=20)
+    row = db.execute("SELECT * FROM suggestions WHERE rule_id='pr_too_large_1'").fetchone()
+    assert row is None
+
+
+# ---------------------------------------------------------------------------
+# F7 + F10: review comment summary is cached per comment hash
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.spec("pr_monitor.F7")
+@pytest.mark.spec("pr_monitor.F10")
+def test_summarise_review_comments_cached(db):
+    """Second run with same comments does not call LLM again."""
+    comments = [
+        {"user": {"login": "reviewer"}, "path": "foo.py", "body": "Needs a test"},
+    ]
+
+    with (
+        patch("jarvis.pr_monitor._gh_json", return_value=comments),
+        patch("jarvis.pr_monitor._call_claude", return_value="summary") as mock_llm,
+    ):
+        _summarise_review_comments(db, "owner/repo", _pr(number=3))
+        _summarise_review_comments(db, "owner/repo", _pr(number=3))
+
+    assert mock_llm.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# F9: exits cleanly when no GitHub token configured
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.spec("pr_monitor.F9")
-def test_run_monitor_records_activity_log(db, monkeypatch):
+def test_run_pr_monitor_exits_cleanly_without_token(monkeypatch, caplog):
+    """run_pr_monitor logs a warning and returns without error when no token."""
+    import keyring
+
+    monkeypatch.setattr(keyring, "get_password", lambda *a: None)
+
+    with patch("jarvis.pr_monitor._run_monitor") as mock_inner:
+        run_pr_monitor()
+
+    mock_inner.assert_not_called()
+
+
+@pytest.mark.spec("pr_monitor.F9")
+def test_run_pr_monitor_exits_cleanly_no_gh_cli(monkeypatch):
+    """run_pr_monitor returns without error when gh CLI is not installed."""
+    import shutil
+
     import keyring
 
     monkeypatch.setattr(keyring, "get_password", lambda *a: "fake-token")
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
 
-    with patch("jarvis.pr_monitor._get") as mock_get:
-        mock_get.return_value = []
-        run_monitor(db, account_keys=["github_token"], repos=["owner/repo"])
+    with patch("jarvis.pr_monitor._run_monitor") as mock_inner:
+        run_pr_monitor()
 
-    row = db.execute(
-        "SELECT * FROM activity_log WHERE source='pr_monitor' AND kind='monitor_run'"
-    ).fetchone()
-    assert row is not None
-
-
-# ---------------------------------------------------------------------------
-# F10: list_open_prs returns flat list
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.spec("pr_monitor.F10")
-def test_list_open_prs_returns_pr_fields(monkeypatch):
-    import keyring
-
-    monkeypatch.setattr(keyring, "get_password", lambda *a: "fake-token")
-
-    pr_data = {
-        "number": 7,
-        "title": "Add feature",
-        "user": {"login": "dev"},
-        "draft": False,
-        "html_url": "https://github.com/o/r/pull/7",
-        "changed_files": 4,
-        "additions": 80,
-        "deletions": 10,
-    }
-    check_runs = {"check_runs": [{"conclusion": "success"}]}
-
-    def fake_get(url, token, **kw):
-        if "check-runs" in url:
-            return check_runs
-        return [pr_data]
-
-    with patch("jarvis.pr_monitor._get", side_effect=fake_get):
-        result = list_open_prs(account_keys=["github_token"], repos=["o/r"])
-
-    assert len(result) == 1
-    assert result[0]["number"] == 7
-    assert result[0]["ci"] == "passing"
-    assert result[0]["repo"] == "o/r"
+    mock_inner.assert_not_called()
