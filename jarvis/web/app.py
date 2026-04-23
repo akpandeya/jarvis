@@ -172,13 +172,17 @@ def api_suggestions():
 
 @app.post("/api/ingest")
 def api_ingest(days: int = Query(7)):
-    """Trigger ingest synchronously. Called by the dashboard button."""
+    """Trigger ingest synchronously. Returns logs + summary as HTML."""
     try:
         from jarvis.ingest import ingest_all
 
-        total = ingest_all(days=days)
+        logs: list[str] = []
+        total = ingest_all(days=days, log_collector=logs)
+        lines_html = "".join(f"<div>{line}</div>" for line in logs if line.strip())
         return HTMLResponse(
-            f'<span style="color:var(--pico-primary)">✓ {total} events ingested.</span>'
+            f'<div style="font-family:monospace;font-size:.8rem;'
+            f'color:var(--pico-muted-color);margin-top:.5rem">{lines_html}</div>'
+            f'<strong style="color:var(--pico-primary)">✓ {total} events ingested.</strong>'
         )
     except Exception as e:
         return HTMLResponse(f'<span style="color:var(--pico-color-red)">Ingest failed: {e}</span>')

@@ -49,3 +49,11 @@ component: jarvis/web/app.py
 ## Sessions
 
 **F11** WHEN `/sessions` is loaded THEN it SHALL list recent session snapshots, optionally filtered by project.
+
+---
+
+## Ingest Button
+
+**F12** WHEN the "Run Ingest" button is clicked THEN it SHALL be disabled and show a loading indicator while ingest runs, display per-source log lines on completion, re-enable after the response, and trigger a page reload 1.5 seconds after settling.
+
+**F13** WHEN the stale_ingest suggestion is displayed THEN its action SHALL be a clickable "Run Ingest" button rather than a static code block.
