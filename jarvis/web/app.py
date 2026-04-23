@@ -172,19 +172,16 @@ def api_suggestions():
 
 @app.post("/api/ingest")
 def api_ingest(days: int = Query(7)):
-    """Trigger ingest in the background. Called by the dashboard button."""
-    import subprocess
-    import sys
+    """Trigger ingest synchronously. Called by the dashboard button."""
+    try:
+        from jarvis.ingest import ingest_all
 
-    subprocess.Popen(
-        [sys.executable, "-m", "jarvis", "ingest", "--days", str(days)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    return HTMLResponse(
-        '<span style="color:var(--pico-primary)">Ingesting… refresh in a moment.</span>'
-    )
+        total = ingest_all(days=days)
+        return HTMLResponse(
+            f'<span style="color:var(--pico-primary)">✓ {total} events ingested.</span>'
+        )
+    except Exception as e:
+        return HTMLResponse(f'<span style="color:var(--pico-color-red)">Ingest failed: {e}</span>')
 
 
 @app.get("/sessions", response_class=HTMLResponse)

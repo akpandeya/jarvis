@@ -41,10 +41,9 @@ def init_db(db_path: Path | None = None) -> None:
 
 
 def get_db(db_path: Path | None = None) -> sqlite3.Connection:
-    """Get a connection, initializing the DB if needed."""
+    """Get a connection, running any pending migrations."""
     path = db_path or DB_PATH
-    if not path.exists():
-        init_db(path)
+    init_db(path)  # migrations use IF NOT EXISTS — safe to run every time
     return _connect(path)
 
 
