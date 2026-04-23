@@ -40,15 +40,20 @@ integrations/* → ingest.py → db.py (SQLite) → workflows/* / brain.py → C
 
 ## Branch Naming & Versioning
 
-Branch names control the automatic version bump that runs on every merge to `main`:
+**Always create a feature branch — never commit directly to `main`.** Branch protection requires a PR and passing CI before merge.
 
-| Prefix | Example | Version bump |
-|---|---|---|
-| `feat/` | `feat/my-feature` | minor (`0.2.0` → `0.3.0`) |
-| `fix/` or `patch/` | `fix/some-bug` | patch (`0.2.0` → `0.2.1`) |
-| `major/` or `breaking/` | `major/new-api` | major (`0.2.0` → `1.0.0`) |
+Branch names control the automatic version bump on merge:
 
-Anything else defaults to patch. The bump is committed automatically by GitHub Actions after merge. Dev builds (running from the repo) show `0.3.0-dev+abc1234`; the installed tool shows clean `0.3.0`.
+| Prefix | When to use | Version bump | Example |
+|---|---|---|---|
+| `feat/` | New user-visible capability | minor (`0.2.0` → `0.3.0`) | `feat/ingest-ux` |
+| `fix/` | Bug fix, regression, crash | patch (`0.2.0` → `0.2.1`) | `fix/update-repo-path` |
+| `patch/` | Non-bug small change (copy, style) | patch | `patch/badge-wording` |
+| `major/` or `breaking/` | Breaking API or behaviour change | major (`0.2.0` → `1.0.0`) | `major/new-config-format` |
+
+Anything else (e.g. `chore/`, `docs/`) defaults to patch.
+
+The bump runs automatically via GitHub Actions after every merge to `main`, updating `pyproject.toml` and `jarvis/__init__.py`. Dev builds show `0.3.0-dev+abc1234`; the installed tool shows clean `0.3.0`.
 
 ## Spec-Driven Development (SDD)
 
