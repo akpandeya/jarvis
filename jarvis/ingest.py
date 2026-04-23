@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -35,8 +36,18 @@ def _store_event(conn: sqlite3.Connection, raw: RawEvent) -> None:
         link_event_entity(conn, event_id, entity_id, role)
 
 
-def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
+def ingest_all(
+    days: int = 7,
+    source_filter: str | None = None,
+    log_collector: list[str] | None = None,
+) -> int:
     """Run all integrations and store events. Returns count of new events."""
+
+    def _log(msg: str) -> None:
+        console.print(msg)
+        if log_collector is not None:
+            log_collector.append(re.sub(r"\[/?[^\]]*\]", "", msg))
+
     config = JarvisConfig.load()
     conn = get_db()
     since = datetime.now(UTC) - timedelta(days=days)
@@ -70,14 +81,14 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
     for integration in integrations:
         name = integration.name
         if not integration.health_check():
-            console.print(f"  [yellow]skip[/yellow] {name} (unavailable)")
+            _log(f"  [yellow]skip[/yellow] {name} (unavailable)")
             continue
 
-        console.print(f"  [blue]pulling[/blue] {name}...")
+        _log(f"  [blue]pulling[/blue] {name}...")
         events = integration.fetch_since(since)
         for raw in events:
             _store_event(conn, raw)
-        console.print(f"  [green]done[/green] {name}: {len(events)} events")
+        _log(f"  [green]done[/green] {name}: {len(events)} events")
         total += len(events)
 
     # Run cross-source correlation
@@ -85,14 +96,14 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
 
     links = correlate_events(conn)
     if links:
-        console.print(f"  [blue]correlated[/blue] {links} event-entity links")
+        _log(f"  [blue]correlated[/blue] {links} event-entity links")
 
     # Run entity resolution to merge duplicate people
     from jarvis.resolver import resolve_entities
 
     merges = resolve_entities(conn)
     if merges:
-        console.print(f"  [blue]resolved[/blue] {merges} duplicate entities")
+        _log(f"  [blue]resolved[/blue] {merges} duplicate entities")
 
     # Collect computer-wide activity
     if source_filter in (None, "activity"):
@@ -101,7 +112,7 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
         activity_counts = collect_all(conn, since, config=config)
         activity_total = sum(activity_counts.values())
         if activity_total:
-            console.print(
+            _log(
                 f"  [green]activity[/green] {activity_total} new rows "
                 f"({', '.join(f'{s}:{n}' for s, n in activity_counts.items() if n)})"
             )
