@@ -28,7 +28,8 @@ jobs:
       - name: Version consistency
         run: |
           TOML_VER=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          PKG_VER=$(uv run python -c "import jarvis; print(jarvis.__version__)")
+          # Strip dev suffix (e.g. "0.2.0-dev+abc1234" → "0.2.0") before comparing
+          PKG_VER=$(uv run python -c "import jarvis; print(jarvis.__version__.split('-')[0])")
           if [ "$TOML_VER" != "$PKG_VER" ]; then
             echo "Version mismatch: pyproject.toml=$TOML_VER jarvis/__init__.py=$PKG_VER"
             exit 1

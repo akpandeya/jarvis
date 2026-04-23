@@ -76,7 +76,7 @@ def test_version_constant_is_set():
     import jarvis
 
     assert hasattr(jarvis, "__version__")
-    assert jarvis.__version__ == "0.2.0"
+    assert jarvis.__version__  # non-empty
 
 
 def test_version_matches_pyproject(tmp_path):
@@ -92,4 +92,6 @@ def test_version_matches_pyproject(tmp_path):
     pyproject = Path(__file__).parent.parent / "pyproject.toml"
     with open(pyproject, "rb") as f:
         data = tomllib.load(f)
-    assert data["project"]["version"] == jarvis.__version__
+    # Dev builds have "-dev+<sha>" suffix; strip it before comparing
+    base_version = jarvis.__version__.split("-")[0]
+    assert data["project"]["version"] == base_version

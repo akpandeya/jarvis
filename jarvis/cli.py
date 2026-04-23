@@ -830,16 +830,36 @@ def update() -> None:
     if was_running:
         quit_jarvis()
 
-    console.print("[blue]Pulling latest changes...[/blue]")
-    result = subprocess.run(["git", "-C", str(repo), "pull"], capture_output=True, text=True)
-    if result.returncode != 0:
-        console.print(f"[yellow]git pull failed:[/yellow] {result.stderr.strip()}")
+    def _git(*args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(repo), *args], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+
+    console.print("[blue]Checking for updates...[/blue]")
+    try:
+        before_sha = _git("rev-parse", "--short", "HEAD")
+        subprocess.run(["git", "-C", str(repo), "fetch"], capture_output=True)
+        remote_sha = _git("rev-parse", "--short", "origin/main")
+    except Exception as e:
+        console.print(f"[yellow]Could not check remote:[/yellow] {e}")
+        before_sha = remote_sha = "unknown"
+
+    if before_sha == remote_sha:
+        console.print(f"[dim]Already at latest ({before_sha}).[/dim]")
     else:
-        console.print(result.stdout.strip() or "Already up to date.")
+        result = subprocess.run(["git", "-C", str(repo), "pull"], capture_output=True, text=True)
+        if result.returncode != 0:
+            console.print(f"[yellow]git pull failed:[/yellow] {result.stderr.strip()}")
+        else:
+            try:
+                after_sha = _git("rev-parse", "--short", "HEAD")
+            except Exception:
+                after_sha = "unknown"
+            console.print(f"[green]Pulled[/green] {before_sha} → {after_sha}")
 
     console.print("[blue]Reinstalling...[/blue]")
     result = subprocess.run(
-        ["uv", "tool", "install", "--editable", str(repo), "--force"],
+        ["uv", "tool", "install", str(repo), "--force"],
         capture_output=True,
         text=True,
     )
@@ -847,7 +867,13 @@ def update() -> None:
         console.print(f"[red]Install failed:[/red] {result.stderr.strip()}")
         raise typer.Exit(1)
 
-    console.print("[green]✓ Updated.[/green]")
+    # Read version from the freshly installed binary
+    import shutil
+
+    jarvis_bin = shutil.which("jarvis") or "jarvis"
+    ver_result = subprocess.run([jarvis_bin, "--version"], capture_output=True, text=True)
+    new_version = ver_result.stdout.strip()
+    console.print(f"[green]✓ Updated.[/green] {new_version}")
 
     if was_running:
         from jarvis.launcher import launch
