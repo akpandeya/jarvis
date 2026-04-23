@@ -34,7 +34,7 @@ Scheduled every 2h via launchd. Polls all open PRs across all configured GitHub 
 
 - [ ] **SDD: Write `docs/specs/pr_monitor.md`** — behaviours for CI failure alert, review comment summary, auto-merge, staging→production prompt
 - [ ] **`jarvis/pr_monitor.py`** — deterministic rules engine over GitHub PR state
-  - CI failure → surface failing check name + link (no LLM)
+  - CI failure → LLM reads the failing log, explains the root cause, and proposes a fix pushed as a new commit to the PR branch
   - New review comments since last check → LLM summarises them concisely (cached per PR+comment hash)
   - Approved + all checks green → auto-merge OR prompt if branch protection blocks
   - Deployed to staging → one-shot prompt to promote to production

@@ -44,7 +44,7 @@ Rules (no LLM):
 - Meeting in < 30min with attendees → `jarvis prep`
 - Last session save > 4h, many events since → `jarvis session save`
 - 3+ project switches in 2h → `jarvis context`
-- PR with CI failure → alert with failing check name (no LLM)
+- PR with CI failure → LLM reads the failing log, explains what broke, and proposes a fix as a new commit on the PR branch
 - PR with new review comments → LLM summarises the comments concisely
 - PR approved and all checks green → auto-merges (or prompts if branch protection blocks it)
 - PR deployed to staging → asks whether to promote to production, once per PR, across all configured GitHub profiles
