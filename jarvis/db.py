@@ -206,15 +206,50 @@ def query_activity(
     return [dict(r) for r in rows]
 
 
-def command_frequency(conn: sqlite3.Connection, days: int = 30) -> dict[str, int]:
-    since = (datetime.now() - timedelta(days=days)).isoformat()
+def command_frequency(conn: sqlite3.Connection, limit: int = 10) -> list[tuple[str, int]]:
+    """Return top CLI commands by frequency from activity_log."""
     rows = conn.execute(
         """SELECT title, COUNT(*) as cnt FROM activity_log
-           WHERE source='jarvis_cli' AND happened_at >= ?
-           GROUP BY title ORDER BY cnt DESC""",
+           WHERE source='jarvis_cli'
+           GROUP BY title ORDER BY cnt DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [(r["title"], r["cnt"]) for r in rows]
+
+
+def top_urls(conn: sqlite3.Connection, limit: int = 10) -> list[tuple[str, int]]:
+    """Return top URL domains from Firefox events, ordered by visit count."""
+    rows = conn.execute(
+        """SELECT url, COUNT(*) as cnt FROM events
+           WHERE source='firefox' AND url IS NOT NULL
+           GROUP BY url ORDER BY cnt DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    # Extract domain from URL
+    from urllib.parse import urlparse
+
+    domain_counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            domain = urlparse(r["url"]).netloc or r["url"]
+        except Exception:
+            domain = r["url"]
+        domain_counts[domain] = domain_counts.get(domain, 0) + r["cnt"]
+    # Re-sort and limit
+    sorted_domains = sorted(domain_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return sorted_domains
+
+
+def source_distribution(conn: sqlite3.Connection, days: int = 30) -> dict[str, int]:
+    """Return event count per source for the last N days."""
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """SELECT source, COUNT(*) as cnt FROM events
+           WHERE happened_at >= ?
+           GROUP BY source ORDER BY cnt DESC""",
         (since,),
     ).fetchall()
-    return {r["title"]: r["cnt"] for r in rows}
+    return {r["source"]: r["cnt"] for r in rows}
 
 
 # --- Suggestions ---
