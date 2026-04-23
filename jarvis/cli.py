@@ -805,5 +805,69 @@ def menubar() -> None:
     main()
 
 
+@app.command()
+def quit() -> None:
+    """Stop the running Jarvis menu bar process."""
+    from jarvis.launcher import quit_jarvis
+
+    quit_jarvis()
+
+
+@app.command()
+def update() -> None:
+    """Pull latest code and reinstall jarvis, then restart."""
+    import subprocess
+
+    from jarvis.launcher import _already_running, quit_jarvis
+
+    # Find repo root (two levels up from this file)
+    repo = Path(__file__).parent.parent
+    if not (repo / "pyproject.toml").exists():
+        console.print("[red]Cannot find repo root — run `make install` manually.[/red]")
+        raise typer.Exit(1)
+
+    was_running = _already_running()
+    if was_running:
+        quit_jarvis()
+
+    console.print("[blue]Pulling latest changes...[/blue]")
+    result = subprocess.run(["git", "-C", str(repo), "pull"], capture_output=True, text=True)
+    if result.returncode != 0:
+        console.print(f"[yellow]git pull failed:[/yellow] {result.stderr.strip()}")
+    else:
+        console.print(result.stdout.strip() or "Already up to date.")
+
+    console.print("[blue]Reinstalling...[/blue]")
+    result = subprocess.run(
+        ["uv", "tool", "install", "--editable", str(repo), "--force"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        console.print(f"[red]Install failed:[/red] {result.stderr.strip()}")
+        raise typer.Exit(1)
+
+    console.print("[green]✓ Updated.[/green]")
+
+    if was_running:
+        from jarvis.launcher import launch
+
+        launch()
+
+
+# --- Setup subcommands ---
+
+setup_app = typer.Typer(help="Configure Jarvis integrations")
+app.add_typer(setup_app, name="setup")
+
+
+@setup_app.command("profiles")
+def setup_profiles_cmd() -> None:
+    """Discover and label Firefox / Thunderbird profiles."""
+    from jarvis.installer import setup_profiles
+
+    setup_profiles()
+
+
 if __name__ == "__main__":
     app()

@@ -31,3 +31,11 @@ component: jarvis/installer.py, jarvis/menubar.py, jarvis/updater.py, scripts/bo
 **F11** WHEN `scripts/build_shiv.sh` is run THEN it SHALL produce a compressed `dist/jarvis-<version>.pyz` executable that accepts `--help` without a full repo checkout.
 
 **F12** WHEN a git tag matching `v*` is pushed THEN the GitHub Actions release workflow SHALL build the shiv artifact on `macos-latest` and attach it to a GitHub Release with auto-generated release notes.
+
+**F13** WHEN `jarvis install` completes profile discovery THEN it SHALL display all discovered Firefox and Thunderbird profiles in a table and prompt the user to label each Firefox profile (or type "skip" to exclude it) and to supply comma-separated work email domains for Thunderbird account classification.
+
+**F14** WHEN `jarvis setup profiles` is run THEN it SHALL re-run the profile discovery and labelling flow independently of the full install wizard.
+
+**F15** WHEN the menu bar icon is running AND there are pending suggestions THEN the title SHALL be "J ●"; when there are no pending suggestions the title SHALL be "J".
+
+**F16** WHEN `jarvis update` is run THEN it SHALL pull the latest code via `git pull` and reinstall the package via `uv tool install --editable . --force`, then optionally restart background daemons.

@@ -58,6 +58,23 @@ def clear_pid() -> None:
     _PID_FILE.unlink(missing_ok=True)
 
 
+def quit_jarvis() -> None:
+    """Terminate the running Jarvis menubar process if any."""
+    if not _PID_FILE.exists():
+        console.print("[dim]Jarvis is not running.[/dim]")
+        return
+    try:
+        pid = int(_PID_FILE.read_text().strip())
+        os.kill(pid, 15)  # SIGTERM
+        _PID_FILE.unlink(missing_ok=True)
+        console.print("[green]Jarvis stopped.[/green]")
+    except (ValueError, ProcessLookupError):
+        _PID_FILE.unlink(missing_ok=True)
+        console.print("[dim]Jarvis was not running (stale PID removed).[/dim]")
+    except PermissionError:
+        console.print("[red]Permission denied stopping Jarvis.[/red]")
+
+
 def launch() -> None:
     """Start menubar + web server as background daemons if not already running."""
     if _already_running():
