@@ -10,6 +10,7 @@ from jarvis.config import JarvisConfig
 from jarvis.db import get_db, kv_set, link_event_entity, upsert_entity, upsert_event
 from jarvis.integrations.base import RawEvent
 from jarvis.integrations.claude_sessions import ClaudeSessions
+from jarvis.integrations.firefox import Firefox
 from jarvis.integrations.gcal import GCal
 from jarvis.integrations.git_local import GitLocal
 from jarvis.integrations.github import GitHub
@@ -77,6 +78,9 @@ def ingest_all(
 
     if source_filter in (None, "claude_sessions"):
         integrations.append(ClaudeSessions())
+
+    if source_filter in (None, "firefox"):
+        integrations.append(Firefox())
 
     for integration in integrations:
         name = integration.name
