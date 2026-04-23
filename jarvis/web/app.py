@@ -8,7 +8,16 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from jarvis.db import event_count, get_db, list_sessions, query_events, search_events
+from jarvis.db import (
+    add_repo_path,
+    delete_repo_path,
+    event_count,
+    get_db,
+    list_repo_paths,
+    list_sessions,
+    query_events,
+    search_events,
+)
 from jarvis.patterns import (
     collaboration_frequency,
     context_switches,
@@ -254,14 +263,19 @@ def _repo_decode(encoded: str) -> str:
 
 
 def _local_path_for_repo(repo: str) -> Path | None:
-    """Return local checkout path if the repo is in git_local.repo_paths."""
+    """Return local checkout path if the repo is in DB repo_paths or git_local.repo_paths."""
     try:
         from jarvis.config import JarvisConfig
 
         config = JarvisConfig.load()
+        conn = get_db()
+        db_paths = [row["path"] for row in list_repo_paths(conn)]
+        conn.close()
+
+        all_paths = db_paths + list(config.git_local.repo_paths or [])
         repo_name = repo.split("/")[-1]
-        for p in config.git_local.repo_paths:
-            lp = Path(p)
+        for p in all_paths:
+            lp = Path(p).expanduser()
             if lp.name == repo_name and (lp / ".git").exists():
                 return lp
     except Exception:
@@ -375,19 +389,88 @@ def prs_page(request: Request):
     )
 
 
+def _gh_accounts() -> list[str]:
+    """Return all gh-authenticated usernames."""
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        # Parse "✓ Logged in to github.com account USERNAME" lines
+        import re
+
+        return re.findall(r"account (\S+)", result.stderr + result.stdout)
+    except Exception:
+        return []
+
+
+def _remote_for_local_repo(path: str) -> str | None:
+    """Extract owner/repo from a local git repo's remote URL."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        url = result.stdout.strip()
+        # SSH: git@github.com:owner/repo.git  or HTTPS: https://github.com/owner/repo.git
+        import re
+
+        m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _repos_from_local_paths(config) -> list[str]:
+    """Return GitHub owner/repo strings inferred from git_local.repo_paths."""
+    repos = []
+    for p in config.git_local.repo_paths or []:
+        path = str(Path(p).expanduser())
+        repo = _remote_for_local_repo(path)
+        if repo and repo not in repos:
+            repos.append(repo)
+    return repos
+
+
+def _repos_from_db(conn) -> list[str]:
+    """Return GitHub owner/repo strings inferred from DB repo_paths table."""
+    repos = []
+    for row in list_repo_paths(conn):
+        path = str(Path(row["path"]).expanduser())
+        repo = _remote_for_local_repo(path)
+        if repo and repo not in repos:
+            repos.append(repo)
+    return repos
+
+
 @app.post("/api/prs/discover")
 def api_prs_discover():
-    """Search GitHub for PRs involving the authenticated user. Returns HTML fragment."""
+    """Search GitHub for open PRs — scans local repos + all gh accounts. Returns HTML fragment."""
     from jarvis.config import JarvisConfig
 
     config = JarvisConfig.load()
-    username = config.github.username or ""
-
+    conn = get_db()
     prs: list[dict] = []
     seen: set[str] = set()
 
-    # Search across configured repos
-    for repo in config.github.repos or []:
+    # Build full repo list: explicit config + DB paths + config git_local paths
+    all_repos = list(config.github.repos or [])
+    for r in _repos_from_db(conn):
+        if r not in all_repos:
+            all_repos.append(r)
+    conn.close()
+    for r in _repos_from_local_paths(config):
+        if r not in all_repos:
+            all_repos.append(r)
+
+    # List open PRs in every known repo
+    for repo in all_repos:
         data = _gh(
             "pr",
             "list",
@@ -404,15 +487,15 @@ def api_prs_discover():
                     seen.add(key)
                     prs.append({**pr, "repo": repo})
 
-    # Also search by involvement if username configured
-    if username:
+    # Search by involvement across ALL authenticated gh accounts
+    for account in _gh_accounts():
         result = subprocess.run(
             [
                 "gh",
                 "search",
                 "prs",
                 "--involves",
-                username,
+                account,
                 "--state",
                 "open",
                 "--json",
@@ -700,3 +783,60 @@ def api_pr_reply(repo_encoded: str, pr_number: int, comment_id: int, body: str =
     return HTMLResponse(
         f'<div style="font-size:.8em;color:var(--pico-muted-color)">↑ Replied: {body}</div>'
     )
+
+
+# ---------------------------------------------------------------------------
+# Repo path settings
+# ---------------------------------------------------------------------------
+
+
+def _repo_paths_fragment(conn) -> str:
+    rows = list_repo_paths(conn)
+    if not rows:
+        return '<p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0">No paths added yet.</p>'
+    items = ""
+    for row in rows:
+        path = row["path"]
+        repo = _remote_for_local_repo(str(Path(path).expanduser()))
+        label = (
+            f"→ {repo}"
+            if repo
+            else '<span style="color:var(--pico-muted-color)">(not a GitHub repo)</span>'
+        )
+        items += (
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'padding:.3rem 0;border-bottom:1px solid var(--pico-muted-border-color)">'
+            f'<span style="font-size:.85em"><code>{path}</code> <span style="color:var(--pico-muted-color)">{label}</span></span>'
+            f'<button style="font-size:.75rem;padding:.15rem .5rem;background:none;'
+            f'border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"'
+            f' hx-delete="/api/settings/repo-paths/{row["id"]}"'
+            f' hx-target="#repo-paths-list" hx-swap="innerHTML">✕</button>'
+            f"</div>"
+        )
+    return items
+
+
+@app.get("/api/settings/repo-paths", response_class=HTMLResponse)
+def settings_repo_paths_get():
+    conn = get_db()
+    html = _repo_paths_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
+@app.post("/api/settings/repo-paths", response_class=HTMLResponse)
+def settings_repo_paths_add(path: str = Form(...)):
+    conn = get_db()
+    add_repo_path(conn, path.strip())
+    html = _repo_paths_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
+@app.delete("/api/settings/repo-paths/{path_id}", response_class=HTMLResponse)
+def settings_repo_paths_delete(path_id: str):
+    conn = get_db()
+    delete_repo_path(conn, path_id)
+    html = _repo_paths_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)

@@ -20,6 +20,28 @@
 
 <div id="discover-panel" style="margin-bottom:1rem"></div>
 
+<details style="margin-bottom:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.75rem 1rem">
+  <summary style="cursor:pointer;font-weight:600;font-size:.9em">Local Repo Paths</summary>
+  <p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0 .75rem">
+    Add local checkout paths so Jarvis can auto-discover PRs in those repos and open branches in your IDE.
+  </p>
+  <div id="repo-paths-list"
+       hx-get="/api/settings/repo-paths"
+       hx-trigger="load"
+       style="margin-bottom:.75rem">
+    <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
+  </div>
+  <form hx-post="/api/settings/repo-paths"
+        hx-target="#repo-paths-list"
+        hx-swap="innerHTML"
+        hx-on:htmx:after-request="this.reset()">
+    <div style="display:flex;gap:.5rem;align-items:end">
+      <input name="path" type="text" placeholder="~/code/my-project" style="margin:0;flex:1;font-size:.85rem">
+      <button type="submit" style="font-size:.8rem;padding:.35rem .75rem">Add Path</button>
+    </div>
+  </form>
+</details>
+
 {% if not subscriptions %}
 <aside style="border-left:3px solid var(--pico-muted-border-color);padding:.75rem 1rem;color:var(--pico-muted-color)">
   No subscribed PRs yet. Click <strong>↻ Discover PRs</strong> to find open PRs you're involved in.
