@@ -46,6 +46,7 @@ Rules (no LLM):
 - 3+ project switches in 2h → `jarvis context`
 - PR with CI failure → LLM reads the failing log, explains what broke, and proposes a fix as a new commit on the PR branch
 - PR with new review comments → LLM summarises the comments concisely
+- PR grows too large (many files or lines changed) → LLM analyses the diff and suggests how to split it into stacked PRs or independent smaller PRs
 - PR approved and all checks green → auto-merges (or prompts if branch protection blocks it)
 - PR deployed to staging → asks whether to promote to production, once per PR, across all configured GitHub profiles
 
