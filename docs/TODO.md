@@ -64,3 +64,4 @@ Scheduled every 2h via launchd. Polls all open PRs across all configured GitHub 
 - [x] Phase 5: Entity resolution, pattern detection, Kafka integration, launchd scheduling
 - [x] SDD Constitution (`docs/specs/CONSTITUTION.md`)
 - [x] Vision document (`docs/VISION.md`)
+- [x] Specs for all existing modules (`brain`, `ingest`, `config`, `db`, `correlator`, `resolver`, `patterns`, `memory`, `integrations`, `workflows`, `web`)
