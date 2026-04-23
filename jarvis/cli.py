@@ -827,6 +827,17 @@ def pr_monitor() -> None:
 
 
 @app.command()
+def evolve(
+    fresh: bool = typer.Option(False, "--fresh", help="Bypass cache."),
+    create_pr: str = typer.Option(None, "--create-pr", help="Scaffold spec PR for feature."),
+) -> None:
+    """Re-rank feature backlog using your activity data."""
+    from jarvis.evolve import run_evolve
+
+    run_evolve(fresh=fresh, create_pr=create_pr)
+
+
+@app.command()
 def quit() -> None:
     """Stop the running Jarvis menu bar process."""
     from jarvis.launcher import quit_jarvis
