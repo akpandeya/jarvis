@@ -3,7 +3,8 @@
 # Install jarvis CLI system-wide using uv tool install.
 # After this, `jarvis` is available in any terminal without activating a venv.
 install:
-	uv tool install . --force
+	uv build --wheel -q
+	uv tool install $$(ls -t dist/jarvis-*.whl | head -1) --force
 	mkdir -p ~/.jarvis && echo "$$(pwd)" > ~/.jarvis/repo_path
 
 # Set up a dev virtualenv (for running tests / IDE support).

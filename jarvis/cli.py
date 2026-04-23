@@ -866,8 +866,24 @@ def update() -> None:
             console.print(f"[green]Pulled[/green] {before_sha} → {after_sha}")
 
     console.print("[blue]Reinstalling...[/blue]")
+    # Build a wheel first so the installed copy is not live-linked to the repo
+    build_result = subprocess.run(
+        ["uv", "build", "--wheel", "-q"],
+        capture_output=True,
+        text=True,
+        cwd=str(repo),
+    )
+    if build_result.returncode != 0:
+        console.print(f"[red]Build failed:[/red] {build_result.stderr.strip()}")
+        raise typer.Exit(1)
+    # Find the newest wheel
+    wheels = sorted((repo / "dist").glob("jarvis-*.whl"), key=lambda p: p.stat().st_mtime)
+    if not wheels:
+        console.print("[red]No wheel found in dist/[/red]")
+        raise typer.Exit(1)
+    wheel = wheels[-1]
     result = subprocess.run(
-        ["uv", "tool", "install", str(repo), "--force"],
+        ["uv", "tool", "install", str(wheel), "--force"],
         capture_output=True,
         text=True,
     )

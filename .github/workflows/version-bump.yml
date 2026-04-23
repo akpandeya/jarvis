@@ -11,6 +11,7 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'chore: bump version')"
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,14 +21,9 @@ jobs:
       - name: Determine bump type from merged branch name
         id: bump_type
         run: |
-          # Get the branch name from the merge commit message or PR refs
           COMMIT_MSG="${{ github.event.head_commit.message }}"
-          # GitHub squash merges include "feat/branch-name" in the commit message
-          BRANCH=$(echo "$COMMIT_MSG" | grep -oP '(?<=from )[^\s]+' | head -1 || true)
-          # Also try the PR head ref stored in the commit message body
-          if [ -z "$BRANCH" ]; then
-            BRANCH=$(echo "$COMMIT_MSG" | grep -oP '\b(feat|fix|patch|major|breaking)/[^\s]+' | head -1 || true)
-          fi
+          # Squash merges include the branch name in the commit message
+          BRANCH=$(echo "$COMMIT_MSG" | grep -oP '\b(feat|fix|patch|major|breaking)/[^\s\n]+' | head -1 || true)
 
           echo "Detected branch hint: $BRANCH"
 
@@ -36,11 +32,11 @@ jobs:
           elif echo "$BRANCH" | grep -qP '^feat/'; then
             echo "type=minor" >> "$GITHUB_OUTPUT"
           else
-            # Default: patch (covers fix/, patch/, and anything else)
             echo "type=patch" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Bump version
+      - name: Compute new version
+        id: versions
         run: |
           BUMP="${{ steps.bump_type.outputs.type }}"
           CURRENT=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
@@ -55,19 +51,35 @@ jobs:
           fi
 
           echo "Bumping $CURRENT → $NEW ($BUMP)"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
 
-          # Update pyproject.toml
+      - name: Apply version bump
+        run: |
+          CURRENT="${{ steps.versions.outputs.current }}"
+          NEW="${{ steps.versions.outputs.new }}"
           sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW}\"/" pyproject.toml
-
-          # Update jarvis/__init__.py (the hardcoded base version line)
           sed -i "s/^__version__ = \"${CURRENT}\"/__version__ = \"${NEW}\"/" jarvis/__init__.py
 
-          echo "NEW_VERSION=$NEW" >> "$GITHUB_ENV"
-
-      - name: Commit version bump
+      - name: Open PR for version bump
         run: |
+          NEW="${{ steps.versions.outputs.new }}"
+          BRANCH="chore/bump-version-${NEW}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
           git add pyproject.toml jarvis/__init__.py
-          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-          git push
+          git commit -m "chore: bump version to ${NEW}"
+          git push origin "$BRANCH"
+          # Ensure chore label exists
+          gh label create chore --color "#ededed" --description "Maintenance tasks" 2>/dev/null || true
+          PR_URL=$(gh pr create \
+            --title "chore: bump version to ${NEW}" \
+            --body "Automatic version bump triggered by merge to main." \
+            --base main \
+            --head "$BRANCH" \
+            --label "chore")
+          # Enable auto-merge so it lands once CI passes
+          gh pr merge "$PR_URL" --auto --squash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
