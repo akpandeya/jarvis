@@ -8,51 +8,51 @@ component: jarvis/suggestions.py
 
 **Component:** `jarvis/suggestions.py`
 
-`SuggestionsEngine` runs a set of deterministic rules against the local database and surfaces actionable suggestions without calling an LLM. Each rule produces at most one suggestion; suggestions are stored in the `suggestions` table and queried cheaply after every CLI command.
+SuggestionsEngine runs a set of deterministic rules against the local database and surfaces actionable suggestions without calling an LLM. Each rule produces at most one suggestion; suggestions are stored and queried cheaply after every CLI command.
 
 ## Glossary
 
-- **pending suggestion** — a suggestion that is not dismissed and whose `snoozed_until` is either null or in the past.
-- **rule** — an object with a `rule_id: str` and an `evaluate(db) -> Suggestion | None` method.
+- **pending suggestion** — a suggestion that is not dismissed and whose snooze time is either unset or in the past.
+- **rule** — a component that inspects the database and returns either a suggestion or nothing.
 
 ## Behaviours
 
-### F1. evaluate_all runs every registered rule and upserts results
+### F1. All rules are evaluated and results are stored
 
-**WHEN** `evaluate_all(db)` is called **THEN** `SuggestionsEngine` **SHALL** call `evaluate(db)` on each registered rule, and for each non-`None` result upsert a row into the `suggestions` table keyed on `rule_id`, overwriting `message` and `action` if the rule fires again.
+**WHEN** the engine is asked to evaluate **THEN** SuggestionsEngine **SHALL** run every registered rule and upsert the result into the suggestions store keyed by rule ID, overwriting the message and action if the rule fires again.
 
-### F2. evaluate_all does not upsert when a rule returns None
+### F2. A rule that produces no result leaves the store unchanged
 
-**WHEN** a rule's `evaluate(db)` returns `None` **THEN** `evaluate_all` **SHALL NOT** insert or update any row for that `rule_id`.
+**WHEN** a rule finds no trigger condition **THEN** the engine **SHALL NOT** insert or update any row for that rule.
 
-### F3. get_pending returns only active suggestions ordered by priority
+### F3. Pending suggestions are returned ordered by priority
 
-**WHEN** `get_pending(db)` is called **THEN** it **SHALL** return all suggestions where `dismissed = 0` and (`snoozed_until` is null OR `snoozed_until < now()`), ordered by `priority DESC`.
+**WHEN** pending suggestions are requested **THEN** the engine **SHALL** return all suggestions that are not dismissed and are not currently snoozed, ordered from highest to lowest priority.
 
-### F4. no_standup rule fires on weekdays between 09:00 and 11:00 when no standup exists today
+### F4. no_standup rule fires on weekday mornings when no standup has been generated today
 
-**WHEN** `evaluate(db)` is called on the `no_standup` rule, the current day is Monday–Friday, the local time is between 09:00 and 11:00, and no row exists in `summaries` with `kind="standup"` and `created_at` on today's date **THEN** the rule **SHALL** return a suggestion with `action="jarvis standup"` and `priority=80`.
+**WHEN** it is a weekday between 09:00 and 11:00 local time and no standup summary exists for today **THEN** the rule **SHALL** produce a suggestion to run `jarvis standup` with priority 80.
 
-### F5. stale_ingest rule fires when the last ingest was more than 2 hours ago
+### F5. stale_ingest rule fires when ingestion has not run recently
 
-**WHEN** `evaluate(db)` is called on the `stale_ingest` rule and the most recent `happened_at` in the `events` table is more than 2 hours before now **THEN** the rule **SHALL** return a suggestion with `action="jarvis ingest"` and `priority=70`.
+**WHEN** the most recent ingested event is more than 2 hours old **THEN** the rule **SHALL** produce a suggestion to run `jarvis ingest` with priority 70.
 
-### F6. meeting_soon rule fires when a calendar event starts within 30 minutes and has more than one attendee
+### F6. meeting_soon rule fires when a meeting with attendees is starting shortly
 
-**WHEN** `evaluate(db)` is called on the `meeting_soon` rule and an event exists in the `events` table with `source="gcal"`, `happened_at` **between `now` and `now + 30 minutes`** (forward-looking window), and `metadata` containing more than one attendee **THEN** the rule **SHALL** return a suggestion with `action='jarvis prep "<event title>"'` and `priority=90`. The rule requires the GCal integration to have run recently enough to have populated upcoming events.
+**WHEN** a calendar event with more than one attendee is starting within the next 30 minutes **THEN** the rule **SHALL** produce a suggestion to prepare for that meeting with priority 90. This rule requires the calendar integration to have run recently enough to have populated upcoming events.
 
-### F7. unsaved_session rule fires when session save is overdue
+### F7. unsaved_session rule fires when the session has not been saved for a long time
 
-**WHEN** `evaluate(db)` is called on the `unsaved_session` rule, the most recent `sessions` row is more than 4 hours old, and more than 10 events have been inserted since that session **THEN** the rule **SHALL** return a suggestion with `action="jarvis session save"` and `priority=60`.
+**WHEN** the last session save was more than 4 hours ago and more than 10 events have occurred since **THEN** the rule **SHALL** produce a suggestion to run `jarvis session save` with priority 60.
 
-### F8. context_drift rule fires on 3 or more project switches within 2 hours
+### F8. context_drift rule fires on frequent project switching
 
-**WHEN** `evaluate(db)` is called on the `context_drift` rule and the `events` table contains 3 or more distinct `project` values among events with `happened_at` in the last 2 hours **THEN** the rule **SHALL** return a suggestion with `action="jarvis context"` and `priority=50`.
+**WHEN** 3 or more distinct projects appear in events from the last 2 hours **THEN** the rule **SHALL** produce a suggestion to run `jarvis context` with priority 50.
 
-### F9. dismiss marks a suggestion so it no longer appears in get_pending
+### F9. Dismissing a suggestion removes it from pending results
 
-**WHEN** `dismiss(db, suggestion_id)` is called **THEN** the suggestion row **SHALL** have `dismissed = 1` and **SHALL NOT** appear in subsequent `get_pending` results.
+**WHEN** a suggestion is dismissed **THEN** it **SHALL NOT** appear in subsequent pending results.
 
-### F10. snooze suppresses a suggestion until the given datetime
+### F10. Snoozing a suggestion hides it until the given time
 
-**WHEN** `snooze(db, suggestion_id, until)` is called **THEN** the suggestion row **SHALL** have `snoozed_until` set to `until` and **SHALL NOT** appear in `get_pending` results before that time.
+**WHEN** a suggestion is snoozed until a given time **THEN** it **SHALL NOT** appear in pending results before that time.
