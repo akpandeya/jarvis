@@ -16,6 +16,7 @@ from jarvis.integrations.git_local import GitLocal
 from jarvis.integrations.github import GitHub
 from jarvis.integrations.jira import Jira
 from jarvis.integrations.kafka import Kafka
+from jarvis.integrations.thunderbird import Thunderbird
 
 console = Console()
 
@@ -81,6 +82,9 @@ def ingest_all(
 
     if source_filter in (None, "firefox"):
         integrations.append(Firefox())
+
+    if source_filter in (None, "thunderbird"):
+        integrations.append(Thunderbird())
 
     for integration in integrations:
         name = integration.name
