@@ -64,3 +64,7 @@ component: jarvis/activity.py
 ### F12. collect_all accepts an until parameter to bound forward-looking collection
 
 **WHEN** `collect_all(since, until=None)` is called with a non-`None` `until` **THEN** each collector **SHALL** exclude rows with `happened_at > until`. When `until` is `None` no upper bound is applied.
+
+### F13. Thunderbird collector skips spam and deleted messages
+
+**WHEN** `collect_thunderbird(since)` processes a message **THEN** it **SHALL** skip any message where the junk score is ≥ 50 in `global-messages-db.sqlite` OR whose folder name matches any of `{"Spam", "Junk", "Trash", "Deleted Items", "Deleted"}` (case-insensitive). Skipped messages **SHALL NOT** be inserted into `activity_log`.
