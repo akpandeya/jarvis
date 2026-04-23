@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from rich.console import Console
 
@@ -39,7 +39,7 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
     """Run all integrations and store events. Returns count of new events."""
     config = JarvisConfig.load()
     conn = get_db()
-    since = datetime.now() - timedelta(days=days)
+    since = datetime.now(UTC) - timedelta(days=days)
     total = 0
 
     integrations = []

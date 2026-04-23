@@ -170,6 +170,23 @@ def api_suggestions():
     ]
 
 
+@app.post("/api/ingest")
+def api_ingest(days: int = Query(7)):
+    """Trigger ingest in the background. Called by the dashboard button."""
+    import subprocess
+    import sys
+
+    subprocess.Popen(
+        [sys.executable, "-m", "jarvis", "ingest", "--days", str(days)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return HTMLResponse(
+        '<span style="color:var(--pico-primary)">Ingesting… refresh in a moment.</span>'
+    )
+
+
 @app.get("/sessions", response_class=HTMLResponse)
 def sessions_page(
     request: Request,
