@@ -1,6 +1,6 @@
 [project]
 name = "jarvis"
-version = "0.2.8"
+version = "0.2.9"
 description = "Personal engineering assistant — tracks work, orchestrates sessions, automates workflows"
 requires-python = ">=3.12"
 dependencies = [
