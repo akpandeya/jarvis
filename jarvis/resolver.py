@@ -158,11 +158,11 @@ def resolve_entities(conn: sqlite3.Connection | None = None) -> int:
             conn.execute("DELETE FROM event_entities WHERE entity_id = ?", (m["id"],))
             # Also repoint entity_links
             conn.execute(
-                "UPDATE OR IGNORE entity_links SET from_entity = ? WHERE from_entity = ?",
+                "UPDATE OR IGNORE entity_links SET from_id = ? WHERE from_id = ?",
                 (canonical_id, m["id"]),
             )
             conn.execute(
-                "UPDATE OR IGNORE entity_links SET to_entity = ? WHERE to_entity = ?",
+                "UPDATE OR IGNORE entity_links SET to_id = ? WHERE to_id = ?",
                 (canonical_id, m["id"]),
             )
             # Delete the duplicate entity
