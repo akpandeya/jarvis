@@ -21,7 +21,8 @@ jobs:
       - name: Determine bump type from merged branch name
         id: bump_type
         run: |
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          # Read from git log to avoid shell-quoting issues with commit message content
+          COMMIT_MSG=$(git log -1 --format=%B)
           # Squash merges include the branch name in the commit message
           BRANCH=$(echo "$COMMIT_MSG" | grep -oP '\b(feat|fix|patch|major|breaking)/[^\s\n]+' | head -1 || true)
 
