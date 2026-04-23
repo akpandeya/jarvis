@@ -887,6 +887,8 @@ def update() -> None:
     if before_sha == remote_sha:
         console.print(f"[dim]Already at latest ({before_sha}).[/dim]")
     else:
+        # Ensure we're on main before pulling
+        subprocess.run(["git", "-C", str(repo), "checkout", "main"], capture_output=True, text=True)
         result = subprocess.run(
             ["git", "-C", str(repo), "pull", "origin", "main"], capture_output=True, text=True
         )
