@@ -39,7 +39,7 @@ component: jarvis/suggestions.py
 
 ### F6. meeting_soon rule fires when a calendar event starts within 30 minutes and has more than one attendee
 
-**WHEN** `evaluate(db)` is called on the `meeting_soon` rule and an event exists in the `events` table with `source="gcal"`, `happened_at` between now and now+30 minutes, and `metadata` containing more than one attendee **THEN** the rule **SHALL** return a suggestion with `action='jarvis prep "<event title>"'` and `priority=90`.
+**WHEN** `evaluate(db)` is called on the `meeting_soon` rule and an event exists in the `events` table with `source="gcal"`, `happened_at` **between `now` and `now + 30 minutes`** (forward-looking window), and `metadata` containing more than one attendee **THEN** the rule **SHALL** return a suggestion with `action='jarvis prep "<event title>"'` and `priority=90`. The rule requires the GCal integration to have run recently enough to have populated upcoming events.
 
 ### F7. unsaved_session rule fires when session save is overdue
 
