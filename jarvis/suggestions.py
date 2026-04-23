@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from jarvis.db import (
     Suggestion,
+    clear_suggestion,
     dismiss_suggestion,
     get_pending_suggestions,
     snooze_suggestion,
@@ -195,6 +196,10 @@ def evaluate_all(conn: sqlite3.Connection) -> int:
         if suggestion is not None:
             upsert_suggestion(conn, suggestion)
             fired += 1
+        else:
+            # Rule cleared — delete so it can re-fire next time the condition returns
+            rule_id = rule.__name__.lstrip("_")
+            clear_suggestion(conn, rule_id)
     return fired
 
 

@@ -258,6 +258,12 @@ def dismiss_suggestion(conn: sqlite3.Connection, rule_id: str) -> None:
     conn.commit()
 
 
+def clear_suggestion(conn: sqlite3.Connection, rule_id: str) -> None:
+    """Delete the suggestion row so it can re-fire when the rule triggers again."""
+    conn.execute("DELETE FROM suggestions WHERE rule_id = ?", (rule_id,))
+    conn.commit()
+
+
 def snooze_suggestion(conn: sqlite3.Connection, rule_id: str, until: datetime) -> None:
     conn.execute(
         "UPDATE suggestions SET snoozed_until = ? WHERE rule_id = ?",

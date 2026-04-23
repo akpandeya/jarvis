@@ -18,12 +18,8 @@
     var top = data[0];
     var actionHtml;
     if (top.rule_id === 'stale_ingest') {
-      actionHtml = ' &nbsp;<button hx-post="/api/ingest" hx-target="#ingest-output" hx-swap="innerHTML"'
-        + ' hx-on:htmx:before-request="this.disabled=true;this.textContent=\'⏳ Ingesting…\'"'
-        + ' hx-on:htmx:after-request="this.disabled=false;this.textContent=\'↻ Run Ingest\'"'
-        + ' hx-on:htmx:after-settle="setTimeout(()=>location.reload(),1500)"'
-        + ' style="font-size:.8rem;padding:.2rem .6rem">↻ Run Ingest</button>';
-      htmx.process(document.getElementById('suggestions-widget'));
+      // Header already has a Run Ingest button — just show the message
+      actionHtml = '';
     } else {
       actionHtml = ' &nbsp;<code>' + top.action + '</code>';
     }
