@@ -37,33 +37,19 @@ def _insert_event(db, project=None, source="github", happened_at=None):
 
 @pytest.mark.spec("suggestions_engine.F1")
 def test_evaluate_all_returns_count(db):
-    import uuid
+    from jarvis.db import kv_set
 
-    # Insert a stale event so stale_ingest fires
-    upsert_event(
-        db,
-        source="github",
-        kind="commit",
-        title="old",
-        happened_at=datetime.now(UTC) - timedelta(hours=3),
-        url=str(uuid.uuid4()),
-    )
+    # Set a stale last_ingest_at so stale_ingest fires
+    kv_set(db, "last_ingest_at", (datetime.now(UTC) - timedelta(hours=5)).isoformat())
     fired = evaluate_all(db)
     assert fired >= 1
 
 
 @pytest.mark.spec("suggestions_engine.F1")
 def test_evaluate_all_upserts_suggestions(db):
-    import uuid
+    from jarvis.db import kv_set
 
-    upsert_event(
-        db,
-        source="github",
-        kind="commit",
-        title="old",
-        happened_at=datetime.now(UTC) - timedelta(hours=3),
-        url=str(uuid.uuid4()),
-    )
+    kv_set(db, "last_ingest_at", (datetime.now(UTC) - timedelta(hours=5)).isoformat())
     evaluate_all(db)
     rows = db.execute("SELECT * FROM suggestions").fetchall()
     assert len(rows) >= 1
@@ -98,19 +84,20 @@ def test_stale_ingest_silent_when_no_events(db):
 
 @pytest.mark.spec("suggestions_engine.F4")
 def test_stale_ingest_fires_when_last_event_old(db):
+    from jarvis.db import kv_set
     from jarvis.suggestions import _stale_ingest
 
-    old = _now() - timedelta(hours=3)
-    _insert_event(db, happened_at=old)
+    kv_set(db, "last_ingest_at", (_now() - timedelta(hours=5)).isoformat())
     suggestion = _stale_ingest(db)
     assert suggestion is not None
 
 
 @pytest.mark.spec("suggestions_engine.F4")
 def test_stale_ingest_silent_when_recent(db):
+    from jarvis.db import kv_set
     from jarvis.suggestions import _stale_ingest
 
-    _insert_event(db, happened_at=_naive_now())
+    kv_set(db, "last_ingest_at", _now().isoformat())
     suggestion = _stale_ingest(db)
     assert suggestion is None
 

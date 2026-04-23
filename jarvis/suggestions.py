@@ -7,7 +7,7 @@ No LLM calls — all logic is pure SQL + datetime arithmetic.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from jarvis.db import (
     Suggestion,
@@ -53,21 +53,18 @@ def _no_standup(conn: sqlite3.Connection) -> Suggestion | None:
 
 
 def _stale_ingest(conn: sqlite3.Connection) -> Suggestion | None:
-    row = conn.execute("SELECT MAX(happened_at) as latest FROM events").fetchone()
-    if not row or not row["latest"]:
-        return None  # no events yet — don't nag on first install
-    latest_str = row["latest"]
-    # Stored as UTC ISO string — ensure timezone-aware comparison
-    latest = datetime.fromisoformat(latest_str)
-    if latest.tzinfo is None:
-        from datetime import UTC
+    from jarvis.db import kv_get
 
-        latest = latest.replace(tzinfo=UTC)
-    now = datetime.now(latest.tzinfo)
-    if now - latest > timedelta(hours=2):
+    last_str = kv_get(conn, "last_ingest_at")
+    if not last_str:
+        return None  # never ingested — don't nag before first run
+    last = datetime.fromisoformat(last_str)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=UTC)
+    if datetime.now(UTC) - last > timedelta(hours=4):
         return Suggestion(
             rule_id="stale_ingest",
-            message="Activity not ingested in the last 2 hours",
+            message="Activity not ingested in the last 4 hours",
             action="jarvis ingest",
             priority=70,
         )

@@ -264,7 +264,11 @@ def collect_thunderbird(
                 if folder_name in _SPAM_FOLDERS:
                     continue
 
-                msg_dt = datetime.fromtimestamp(row["date"] / 1000, tz=UTC)
+                try:
+                    msg_dt = datetime.fromtimestamp(row["date"] / 1000, tz=UTC)
+                except (OSError, OverflowError, ValueError):
+                    logger.debug("thunderbird: skipping row with bad timestamp %s", row["date"])
+                    continue
                 sender = row["author"] or ""
                 account = _thunderbird_account(sender, cfg.work_domains)
                 ok = insert_activity(
