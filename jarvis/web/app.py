@@ -841,7 +841,7 @@ def settings_repo_paths_browse():
             [
                 "osascript",
                 "-e",
-                'POSIX path of (choose folder with prompt "Select a git repo folder")',
+                'POSIX path of (choose folder with prompt "Select a repo or a folder containing repos")',
             ],
             capture_output=True,
             text=True,
@@ -855,8 +855,25 @@ def settings_repo_paths_browse():
             f'<p style="color:#f87171;font-size:.85em">Folder picker error: {e}</p>'
         )
 
+    # If the chosen folder itself is a git repo, add it directly.
+    # Otherwise scan one level deep for git repos (handles "~/code" parent folders).
+    chosen_path = Path(chosen)
+    candidates: list[str] = []
+    if (chosen_path / ".git").exists():
+        candidates = [chosen]
+    else:
+        for sub in sorted(chosen_path.iterdir()):
+            if sub.is_dir() and (sub / ".git").exists():
+                candidates.append(str(sub))
+
+    if not candidates:
+        return HTMLResponse(
+            '<p style="color:#f87171;font-size:.85em">No git repos found in that folder.</p>'
+        )
+
     conn = get_db()
-    add_repo_path(conn, chosen)
+    for p in candidates:
+        add_repo_path(conn, p)
     html = _repo_paths_fragment(conn)
     conn.close()
     return HTMLResponse(html)

@@ -887,7 +887,9 @@ def update() -> None:
     if before_sha == remote_sha:
         console.print(f"[dim]Already at latest ({before_sha}).[/dim]")
     else:
-        result = subprocess.run(["git", "-C", str(repo), "pull"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["git", "-C", str(repo), "pull", "origin", "main"], capture_output=True, text=True
+        )
         if result.returncode != 0:
             console.print(f"[yellow]git pull failed:[/yellow] {result.stderr.strip()}")
         else:
