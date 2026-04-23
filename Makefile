@@ -3,7 +3,7 @@
 # Install jarvis CLI system-wide using uv tool install.
 # After this, `jarvis` is available in any terminal without activating a venv.
 install:
-	uv tool install --editable . --force
+	uv tool install . --force
 
 # Set up a dev virtualenv (for running tests / IDE support).
 dev:
