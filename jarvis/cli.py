@@ -887,9 +887,19 @@ def update() -> None:
     if before_sha == remote_sha:
         console.print(f"[dim]Already at latest ({before_sha}).[/dim]")
     else:
+        # Stash any local changes, switch to main, pull, then restore
+        stashed = subprocess.run(
+            ["git", "-C", str(repo), "stash", "--include-untracked"],
+            capture_output=True,
+            text=True,
+        )
+        had_stash = "No local changes" not in stashed.stdout
+        subprocess.run(["git", "-C", str(repo), "checkout", "main"], capture_output=True, text=True)
         result = subprocess.run(
             ["git", "-C", str(repo), "pull", "origin", "main"], capture_output=True, text=True
         )
+        if had_stash:
+            subprocess.run(["git", "-C", str(repo), "stash", "pop"], capture_output=True, text=True)
         if result.returncode != 0:
             console.print(f"[yellow]git pull failed:[/yellow] {result.stderr.strip()}")
         else:
