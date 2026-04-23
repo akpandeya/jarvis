@@ -30,6 +30,8 @@ def main() -> None:
             self.menu = [
                 rumps.MenuItem("Open Dashboard", callback=self.open_dashboard),
                 rumps.MenuItem("Run Ingest", callback=self.run_ingest),
+                rumps.MenuItem("↻ Run PR Monitor", callback=self.run_pr_monitor),
+                rumps.MenuItem("⬆ Update Jarvis", callback=self.update_jarvis),
                 rumps.MenuItem("Suggestions", callback=self.show_suggestions),
                 None,
                 rumps.MenuItem("Quit Jarvis", callback=self.quit_app),
@@ -95,6 +97,22 @@ def main() -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
+        def run_pr_monitor(self, _: object) -> None:
+            subprocess.Popen(
+                [jarvis_bin, "pr-monitor"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            rumps.notification("Jarvis", "PR Monitor", "Running PR check in background…")
+
+        def update_jarvis(self, _: object) -> None:
+            subprocess.Popen(
+                [jarvis_bin, "update"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            rumps.notification("Jarvis", "Update", "Updating Jarvis in background…")
 
         def show_suggestions(self, _: object) -> None:
             try:

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% set active = "prs" %}
+{% block title %}PRs{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem">
+  <h2 style="margin:0">PR Workspace</h2>
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+    <span style="font-size:.8em;color:var(--pico-muted-color)">Last checked: {{ last_checked }}</span>
+    <button style="font-size:.75rem;padding:.25rem .75rem"
+      hx-post="/api/prs/discover"
+      hx-target="#discover-panel"
+      hx-swap="innerHTML"
+      hx-on:htmx:before-request="this.disabled=true;this.textContent='Searching…'"
+      hx-on:htmx:after-request="this.disabled=false;this.textContent='↻ Discover PRs'">
+      ↻ Discover PRs
+    </button>
+  </div>
+</div>
+
+<div id="discover-panel" style="margin-bottom:1rem"></div>
+
+{% if not subscriptions %}
+<aside style="border-left:3px solid var(--pico-muted-border-color);padding:.75rem 1rem;color:var(--pico-muted-color)">
+  No subscribed PRs yet. Click <strong>↻ Discover PRs</strong> to find open PRs you're involved in.
+</aside>
+{% else %}
+<div id="pr-list">
+{% for sub in subscriptions %}
+{% set encoded = sub.repo | replace("/", "--") %}
+<article style="margin-bottom:.75rem;padding:.75rem 1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
+    <div>
+      <strong>
+        <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+          #{{ sub.pr_number }} {{ sub.title or "(unknown title)" }}
+        </a>
+      </strong>
+      <div style="font-size:.8em;color:var(--pico-muted-color);margin-top:.2rem">
+        {{ sub.repo }}
+        {% if sub.author %} · {{ sub.author }}{% endif %}
+        {% if sub.branch %} · <code>{{ sub.branch }}</code>{% endif %}
+      </div>
+    </div>
+    <div style="font-size:.85em;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      {{ sub.ci_badge | safe }}
+      &nbsp;
+      {{ sub.review_badge | safe }}
+      {% if sub.state in ('merged', 'closed') %}
+        <span style="font-size:.75em;color:var(--pico-muted-color)">({{ sub.state }})</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap">
+    <button style="font-size:.75rem;padding:.2rem .5rem"
+      hx-get="/api/prs/{{ encoded }}/{{ sub.pr_number }}/detail"
+      hx-target="#detail-{{ sub.pr_number }}"
+      hx-swap="innerHTML"
+      hx-on:htmx:before-request="this.textContent='Loading…'"
+      hx-on:htmx:after-request="this.textContent='🔍 Detail'">
+      🔍 Detail
+    </button>
+    <a href="{{ sub.pr_url or '#' }}" target="_blank"
+       role="button" class="outline" style="font-size:.75rem;padding:.2rem .5rem">
+      ↗ GitHub
+    </a>
+    <button style="font-size:.75rem;padding:.2rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
+      hx-delete="/api/prs/{{ encoded }}/{{ sub.pr_number }}"
+      hx-target="closest article"
+      hx-swap="outerHTML"
+      hx-confirm="Unsubscribe from this PR?">
+      ✕ Unsubscribe
+    </button>
+  </div>
+
+  <div id="detail-{{ sub.pr_number }}"></div>
+</article>
+{% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}
