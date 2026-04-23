@@ -20,7 +20,8 @@ jobs:
       - name: Verify version matches tag
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          PKG_VERSION=$(python3 -c "import jarvis; print(jarvis.__version__)")
+          # Strip dev+sha suffix before comparing
+          PKG_VERSION=$(python3 -c "import jarvis; print(jarvis.__version__.split('-')[0])")
           if [ "$TAG" != "$PKG_VERSION" ]; then
             echo "Tag $TAG does not match package version $PKG_VERSION"
             exit 1

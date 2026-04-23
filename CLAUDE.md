@@ -38,6 +38,18 @@ integrations/* → ingest.py → db.py (SQLite) → workflows/* / brain.py → C
 
 **Entity graph:** Events link to Entities (person/repo/ticket/topic) via `event_entities`. `correlator.py` extracts Jira-style ticket IDs from event text; `resolver.py` deduplicates people via Union-Find on name/email prefix matching.
 
+## Branch Naming & Versioning
+
+Branch names control the automatic version bump that runs on every merge to `main`:
+
+| Prefix | Example | Version bump |
+|---|---|---|
+| `feat/` | `feat/my-feature` | minor (`0.2.0` → `0.3.0`) |
+| `fix/` or `patch/` | `fix/some-bug` | patch (`0.2.0` → `0.2.1`) |
+| `major/` or `breaking/` | `major/new-api` | major (`0.2.0` → `1.0.0`) |
+
+Anything else defaults to patch. The bump is committed automatically by GitHub Actions after merge. Dev builds (running from the repo) show `0.3.0-dev+abc1234`; the installed tool shows clean `0.3.0`.
+
 ## Spec-Driven Development (SDD)
 
 All new modules must have a spec in `docs/specs/` before code is written. Read `docs/specs/CONSTITUTION.md` first.
