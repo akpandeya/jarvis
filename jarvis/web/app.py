@@ -833,6 +833,35 @@ def settings_repo_paths_add(path: str = Form(...)):
     return HTMLResponse(html)
 
 
+@app.post("/api/settings/repo-paths/browse", response_class=HTMLResponse)
+def settings_repo_paths_browse():
+    """Open a native macOS folder picker and add the chosen path."""
+    try:
+        result = subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'POSIX path of (choose folder with prompt "Select a git repo folder")',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return HTMLResponse("")  # user cancelled — return empty, list unchanged
+        chosen = result.stdout.strip().rstrip("/")
+    except Exception as e:
+        return HTMLResponse(
+            f'<p style="color:#f87171;font-size:.85em">Folder picker error: {e}</p>'
+        )
+
+    conn = get_db()
+    add_repo_path(conn, chosen)
+    html = _repo_paths_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
 @app.delete("/api/settings/repo-paths/{path_id}", response_class=HTMLResponse)
 def settings_repo_paths_delete(path_id: str):
     conn = get_db()
