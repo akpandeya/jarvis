@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -205,4 +207,496 @@ def sessions_page(
             "sessions": sessions,
             "project": project,
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR Workspace
+# ---------------------------------------------------------------------------
+
+_IDE_CANDIDATES = [
+    ("IntelliJ IDEA", "IntelliJ IDEA.app", "idea://open?file={path}"),
+    ("VS Code", "Visual Studio Code.app", "vscode://file/{path}"),
+    ("Cursor", "Cursor.app", "cursor://file/{path}"),
+    ("Zed", "Zed.app", "zed://{path}"),
+]
+
+
+def _detect_ide() -> tuple[str, str] | None:
+    """Return (ide_name, url_template) for the first installed IDE, or None."""
+    apps = Path("/Applications")
+    for name, bundle, url_tpl in _IDE_CANDIDATES:
+        if (apps / bundle).exists():
+            return name, url_tpl
+    return None
+
+
+def _gh(*args: str, repo: str | None = None) -> dict | list | None:
+    """Run a gh command and return parsed JSON, or None on failure."""
+    cmd = ["gh", *args]
+    if repo:
+        cmd += ["--repo", repo]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return None
+        return json.loads(result.stdout)
+    except Exception:
+        return None
+
+
+def _repo_encode(repo: str) -> str:
+    return repo.replace("/", "--")
+
+
+def _repo_decode(encoded: str) -> str:
+    return encoded.replace("--", "/", 1)
+
+
+def _local_path_for_repo(repo: str) -> Path | None:
+    """Return local checkout path if the repo is in git_local.repo_paths."""
+    try:
+        from jarvis.config import JarvisConfig
+
+        config = JarvisConfig.load()
+        repo_name = repo.split("/")[-1]
+        for p in config.git_local.repo_paths:
+            lp = Path(p)
+            if lp.name == repo_name and (lp / ".git").exists():
+                return lp
+    except Exception:
+        pass
+    return None
+
+
+def _subscriptions_all(conn) -> list[dict]:
+    rows = conn.execute("SELECT * FROM pr_subscriptions ORDER BY subscribed_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def _subscription_upsert(conn, repo: str, pr_number: int, data: dict) -> None:
+    from datetime import UTC, datetime
+
+    from ulid import ULID
+
+    conn.execute(
+        """INSERT INTO pr_subscriptions
+               (id, repo, pr_number, title, author, branch, pr_url, state, subscribed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+           ON CONFLICT(repo, pr_number) DO UPDATE SET
+               title=excluded.title, author=excluded.author,
+               branch=excluded.branch, pr_url=excluded.pr_url""",
+        (
+            str(ULID()),
+            repo,
+            pr_number,
+            data.get("title"),
+            data.get("author", {}).get("login") if isinstance(data.get("author"), dict) else None,
+            data.get("headRefName"),
+            data.get("url"),
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+    conn.commit()
+
+
+def _subscription_delete(conn, repo: str, pr_number: int) -> None:
+    conn.execute("DELETE FROM pr_subscriptions WHERE repo=? AND pr_number=?", (repo, pr_number))
+    conn.commit()
+
+
+def _ci_badge(rollup: list | None) -> str:
+    if not rollup:
+        return '<span style="color:var(--pico-muted-color)">⏳</span>'
+    statuses = {r.get("conclusion") or r.get("status") for r in rollup}
+    if "FAILURE" in statuses or "failure" in statuses:
+        return '<span style="color:#f87171">✗ CI Failed</span>'
+    if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
+        return '<span style="color:#4ade80">✓ CI Passed</span>'
+    return '<span style="color:var(--pico-muted-color)">⏳ Running</span>'
+
+
+def _review_badge(decision: str | None) -> str:
+    if decision == "APPROVED":
+        return '<span style="color:#4ade80">✓ Approved</span>'
+    if decision == "CHANGES_REQUESTED":
+        return '<span style="color:#f87171">↩ Changes requested</span>'
+    return '<span style="color:var(--pico-muted-color)">Review pending</span>'
+
+
+@app.get("/prs", response_class=HTMLResponse)
+def prs_page(request: Request):
+    conn = get_db()
+    subscriptions = _subscriptions_all(conn)
+
+    # Fetch live status for each subscribed PR
+    enriched = []
+    for sub in subscriptions:
+        pr_data = _gh(
+            "pr",
+            "view",
+            str(sub["pr_number"]),
+            "--json",
+            "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
+            repo=sub["repo"],
+        )
+        if pr_data:
+            sub["live"] = pr_data
+            # Auto-close if merged/closed
+            if pr_data.get("state") in ("MERGED", "CLOSED"):
+                conn.execute(
+                    "UPDATE pr_subscriptions SET state=? WHERE repo=? AND pr_number=?",
+                    (pr_data["state"].lower(), sub["repo"], sub["pr_number"]),
+                )
+                conn.commit()
+                sub["state"] = pr_data["state"].lower()
+        else:
+            sub["live"] = None
+        sub["ci_badge"] = _ci_badge(sub["live"].get("statusCheckRollup") if sub["live"] else None)
+        sub["review_badge"] = _review_badge(
+            sub["live"].get("reviewDecision") if sub["live"] else None
+        )
+        enriched.append(sub)
+
+    from jarvis.db import kv_get
+
+    last_checked = kv_get(conn, "last_pr_check_at") or "Never"
+    conn.close()
+
+    ide = _detect_ide()
+    return templates.TemplateResponse(
+        request,
+        "prs.html",
+        {
+            "subscriptions": enriched,
+            "last_checked": last_checked,
+            "ide_name": ide[0] if ide else None,
+        },
+    )
+
+
+@app.post("/api/prs/discover")
+def api_prs_discover():
+    """Search GitHub for PRs involving the authenticated user. Returns HTML fragment."""
+    from jarvis.config import JarvisConfig
+
+    config = JarvisConfig.load()
+    username = config.github.username or ""
+
+    prs: list[dict] = []
+    seen: set[str] = set()
+
+    # Search across configured repos
+    for repo in config.github.repos or []:
+        data = _gh(
+            "pr",
+            "list",
+            "--json",
+            "number,title,headRefName,url,author,reviewDecision,statusCheckRollup",
+            "--state",
+            "open",
+            repo=repo,
+        )
+        if isinstance(data, list):
+            for pr in data:
+                key = f"{repo}#{pr['number']}"
+                if key not in seen:
+                    seen.add(key)
+                    prs.append({**pr, "repo": repo})
+
+    # Also search by involvement if username configured
+    if username:
+        result = subprocess.run(
+            [
+                "gh",
+                "search",
+                "prs",
+                "--involves",
+                username,
+                "--state",
+                "open",
+                "--json",
+                "number,title,repository,url,author",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if result.returncode == 0:
+            for pr in json.loads(result.stdout or "[]"):
+                repo = pr.get("repository", {}).get("nameWithOwner", "")
+                key = f"{repo}#{pr['number']}"
+                if key and key not in seen:
+                    seen.add(key)
+                    prs.append({**pr, "repo": repo})
+
+    if not prs:
+        return HTMLResponse('<p style="color:var(--pico-muted-color)">No open PRs found.</p>')
+
+    rows = ""
+    for pr in prs:
+        repo = pr.get("repo", "")
+        num = pr.get("number", "")
+        title = pr.get("title", "")
+        url = pr.get("url", "#")
+        author = pr.get("author", {})
+        author_login = author.get("login", "") if isinstance(author, dict) else ""
+        rows += (
+            f"<tr>"
+            f'<td><a href="{url}" target="_blank">#{num}</a></td>'
+            f"<td>{title}</td>"
+            f'<td style="font-size:.8em">{repo}</td>'
+            f'<td style="font-size:.8em">{author_login}</td>'
+            f"<td>"
+            f'<button style="font-size:.75rem;padding:.2rem .6rem" '
+            f'hx-post="/api/prs/subscribe" '
+            f'hx-vals=\'{{"repo":"{repo}","pr_number":{num}}}\' '
+            f'hx-target="#discover-results" hx-swap="outerHTML" '
+            f'hx-on:htmx:after-request="location.reload()">'
+            f"+ Subscribe</button>"
+            f"</td>"
+            f"</tr>"
+        )
+
+    return HTMLResponse(
+        f'<div id="discover-results">'
+        f"<table><thead><tr><th>#</th><th>Title</th><th>Repo</th>"
+        f"<th>Author</th><th></th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+        f"</div>"
+    )
+
+
+@app.post("/api/prs/subscribe")
+def api_prs_subscribe(repo: str = Form(...), pr_number: int = Form(...)):
+    pr_data = (
+        _gh(
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "title,headRefName,url,author,reviewDecision,statusCheckRollup",
+            repo=repo,
+        )
+        or {}
+    )
+    conn = get_db()
+    _subscription_upsert(conn, repo, pr_number, pr_data)
+    conn.close()
+    return HTMLResponse('<span style="color:#4ade80">✓ Subscribed</span>')
+
+
+@app.delete("/api/prs/{repo_encoded}/{pr_number}")
+def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    _subscription_delete(conn, repo, pr_number)
+    conn.close()
+    return HTMLResponse("")
+
+
+@app.get("/api/prs/{repo_encoded}/{pr_number}/detail")
+def api_pr_detail(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+
+    pr = _gh(
+        "pr",
+        "view",
+        str(pr_number),
+        "--json",
+        (
+            "title,body,number,headRefName,url,author,"
+            "reviewDecision,statusCheckRollup,changedFiles,additions,deletions,"
+            "reviews,comments"
+        ),
+        repo=repo,
+    )
+    if pr is None:
+        return HTMLResponse('<p style="color:#f87171">Could not fetch PR details.</p>')
+
+    # Review comments (inline threads)
+    threads_data = _gh("api", f"repos/{repo}/pulls/{pr_number}/comments") or []
+
+    # Group threads by original_position/path
+    threads: dict[str, list[dict]] = {}
+    for c in threads_data if isinstance(threads_data, list) else []:
+        key = c.get("path", "") + ":" + str(c.get("original_position", ""))
+        threads.setdefault(key, []).append(c)
+
+    # Local path + IDE
+    local_path = _local_path_for_repo(repo)
+    ide = _detect_ide()
+    ide_url = None
+    if local_path and ide:
+        ide_url = ide[1].format(path=str(local_path))
+
+    # Build HTML
+    encoded = _repo_encode(repo)
+    body_html = (pr.get("body") or "").replace("\n", "<br>")
+    ci_html = _ci_badge(pr.get("statusCheckRollup"))
+    review_html = _review_badge(pr.get("reviewDecision"))
+    branch = pr.get("headRefName", "")
+    changed = pr.get("changedFiles", 0)
+    adds = pr.get("additions", 0)
+    dels = pr.get("deletions", 0)
+
+    checks_rows = ""
+    for chk in pr.get("statusCheckRollup") or []:
+        name = chk.get("name") or chk.get("context", "")
+        status = chk.get("conclusion") or chk.get("status", "")
+        link = chk.get("detailsUrl") or chk.get("targetUrl") or "#"
+        ok = status in ("SUCCESS", "success")
+        fail = status in ("FAILURE", "failure")
+        icon = "✓" if ok else ("✗" if fail else "⏳")
+        checks_rows += (
+            f"<tr><td>{icon} {name}</td>"
+            f'<td><a href="{link}" target="_blank" style="font-size:.8em">details</a></td></tr>'
+        )
+
+    threads_html = ""
+    for key, comments in threads.items():
+        path = comments[0].get("path", "")
+        threads_html += f'<details><summary style="font-size:.85em;cursor:pointer">{path}</summary>'
+        for c in comments:
+            author = c.get("user", {}).get("login", "")
+            body = c.get("body", "").replace("\n", "<br>")
+            comment_id = c.get("id", "")
+            threads_html += (
+                f'<div style="border-left:3px solid var(--pico-muted-border-color);'
+                f'padding:.5rem;margin:.5rem 0">'
+                f'<strong style="font-size:.85em">{author}</strong><br>{body}'
+                f"</div>"
+            )
+            threads_html += (
+                f'<form hx-post="/api/prs/{encoded}/{pr_number}/reply/{comment_id}" '
+                f'hx-target="this" hx-swap="outerHTML" style="margin:.25rem 0">'
+                f'<input name="body" placeholder="Reply…" style="font-size:.8rem;margin-bottom:.25rem">'
+                f'<button type="submit" style="font-size:.75rem;padding:.2rem .6rem">Reply</button>'
+                f"</form>"
+            )
+        threads_html += "</details>"
+
+    ide_btn = ""
+    if ide_url and ide:
+        ide_btn = (
+            f'<a href="{ide_url}" style="font-size:.8rem;margin-left:.5rem" '
+            f'role="button" class="outline">Open in {ide[0]}</a>'
+        )
+    elif not local_path:
+        ide_btn = f'<code style="font-size:.75rem">gh repo clone {repo}</code>'
+
+    html = f"""
+<div style="padding:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;margin-top:.5rem">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+    <div>
+      <strong>#{pr_number} {pr.get("title", "")}</strong>
+      <span style="font-size:.8em;color:var(--pico-muted-color);margin-left:.5rem">
+        branch: <code>{branch}</code>
+      </span>
+    </div>
+    <div>
+      <a href="{pr.get("url", "#")}" target="_blank" style="font-size:.8rem" role="button" class="outline">
+        View on GitHub ↗
+      </a>
+      {ide_btn}
+    </div>
+  </div>
+  <div style="margin:.5rem 0;font-size:.9em">{ci_html} &nbsp; {review_html}</div>
+  <div style="font-size:.8em;color:var(--pico-muted-color)">{changed} files &nbsp; +{adds} −{dels}</div>
+  {f'<p style="font-size:.9em;margin-top:.75rem">{body_html}</p>' if body_html else ""}
+  {f'<table style="font-size:.8em;margin:.5rem 0"><tbody>{checks_rows}</tbody></table>' if checks_rows else ""}
+  {f'<h4 style="font-size:.9em;margin-top:1rem">Review threads</h4>{threads_html}' if threads_html else ""}
+  <div style="margin-top:1rem">
+    <button style="font-size:.75rem;padding:.2rem .6rem"
+      hx-post="/api/prs/{encoded}/{pr_number}/review"
+      hx-target="#pr-review-{pr_number}"
+      hx-swap="innerHTML"
+      hx-on:htmx:before-request="this.disabled=true;this.textContent='🤖 Reviewing…'"
+      hx-on:htmx:after-request="this.disabled=false;this.textContent='🤖 Review with Claude'">
+      🤖 Review with Claude
+    </button>
+    <div id="pr-review-{pr_number}" style="margin-top:.5rem;font-size:.85em"></div>
+  </div>
+</div>
+"""
+    return HTMLResponse(html)
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/review")
+def api_pr_review(repo_encoded: str, pr_number: int):
+    """Claude reviews the PR diff and posts it as a GitHub review comment."""
+    import re
+
+    repo = _repo_decode(repo_encoded)
+
+    # Get diff
+    diff_result = subprocess.run(
+        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    diff = diff_result.stdout[:6000] if diff_result.returncode == 0 else ""
+
+    if not diff:
+        return HTMLResponse('<span style="color:#f87171">Could not fetch PR diff.</span>')
+
+    prompt = (
+        "Review this pull request diff. Be concise — 3-5 bullet points covering: "
+        "correctness issues, potential bugs, style/clarity suggestions. "
+        "If it looks good, say so briefly.\n\n"
+        f"```diff\n{diff}\n```"
+    )
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "--bare", prompt],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        review_text = result.stdout.strip() or "No review generated."
+    except Exception as e:
+        return HTMLResponse(f'<span style="color:#f87171">Claude error: {e}</span>')
+
+    # Post as GitHub PR comment
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--body",
+            f"🤖 **Jarvis Claude Review**\n\n{review_text}",
+        ],
+        capture_output=True,
+        timeout=15,
+    )
+
+    # Render as HTML
+    html = review_text
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    html = re.sub(r"^[-•] (.+)$", r"<li>\1</li>", html, flags=re.MULTILINE)
+    html = re.sub(r"(<li>.*</li>)", r"<ul>\1</ul>", html, flags=re.DOTALL)
+    html = html.replace("\n\n", "<br>")
+    return HTMLResponse(
+        f'<div style="border-left:3px solid var(--pico-primary);padding:.5rem .75rem">'
+        f"{html}"
+        f'<div style="font-size:.75em;color:var(--pico-muted-color);margin-top:.25rem">'
+        f"↑ Posted as comment on GitHub</div></div>"
+    )
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/reply/{comment_id}")
+def api_pr_reply(repo_encoded: str, pr_number: int, comment_id: int, body: str = Form(...)):
+    repo = _repo_decode(repo_encoded)
+    subprocess.run(
+        ["gh", "api", f"repos/{repo}/pulls/comments/{comment_id}/replies", "-f", f"body={body}"],
+        capture_output=True,
+        timeout=15,
+    )
+    return HTMLResponse(
+        f'<div style="font-size:.8em;color:var(--pico-muted-color)">↑ Replied: {body}</div>'
     )
