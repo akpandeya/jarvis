@@ -5,7 +5,7 @@ import sqlite3
 
 # Forward-declared here to avoid circular imports at the call site
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ulid import ULID
@@ -243,7 +243,7 @@ def upsert_suggestion(conn: sqlite3.Connection, suggestion: Suggestion) -> None:
 
 
 def get_pending_suggestions(conn: sqlite3.Connection) -> list[Suggestion]:
-    now = datetime.now().isoformat()
+    now = datetime.now(UTC).isoformat()
     rows = conn.execute(
         """SELECT rule_id, message, action, priority FROM suggestions
            WHERE dismissed = 0
