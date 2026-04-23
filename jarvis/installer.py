@@ -18,13 +18,20 @@ def _find_jarvis_bin() -> str:
     return "jarvis"
 
 
-def _write_plist(label: str, args_xml: str, extra_keys: str, log_path: Path) -> None:
+def _write_plist(
+    label: str,
+    args_xml: str,
+    extra_keys: str,
+    log_path: Path,
+    run_at_load: bool = True,
+) -> None:
     from jarvis.config import JARVIS_HOME
 
     local_bin = Path.home() / ".local" / "bin"
     path_val = f"/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:{local_bin}"
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     plist_path.parent.mkdir(parents=True, exist_ok=True)
+    run_at_load_val = "<true/>" if run_at_load else "<false/>"
     plist_path.write_text(f"""\
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -40,7 +47,7 @@ def _write_plist(label: str, args_xml: str, extra_keys: str, log_path: Path) -> 
     <key>StandardErrorPath</key>
     <string>{log_path}</string>
     <key>RunAtLoad</key>
-    <true/>
+    {run_at_load_val}
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -74,9 +81,10 @@ def install_launchd_agents(jarvis_bin: str | None = None) -> None:
     )
     _write_plist(
         "com.jarvis.pr_monitor",
-        _args_xml(parts + ["pr", "monitor"]),
+        _args_xml(parts + ["pr-monitor"]),
         "    <key>StartInterval</key>\n    <integer>7200</integer>\n",
         JARVIS_HOME / "pr_monitor.log",
+        run_at_load=False,
     )
     _write_plist(
         "com.jarvis.menubar",
