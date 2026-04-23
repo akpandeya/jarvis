@@ -267,6 +267,19 @@ def snooze_suggestion(conn: sqlite3.Connection, rule_id: str, until: datetime) -
     conn.commit()
 
 
+# --- Key-value store ---
+
+
+def kv_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value))
+    conn.commit()
+
+
+def kv_get(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
 # --- Sessions ---
 
 

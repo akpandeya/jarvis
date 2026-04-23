@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from rich.console import Console
 
 from jarvis.config import JarvisConfig
-from jarvis.db import get_db, link_event_entity, upsert_entity, upsert_event
+from jarvis.db import get_db, kv_set, link_event_entity, upsert_entity, upsert_event
 from jarvis.integrations.base import RawEvent
 from jarvis.integrations.claude_sessions import ClaudeSessions
 from jarvis.integrations.gcal import GCal
@@ -106,5 +106,6 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
                 f"({', '.join(f'{s}:{n}' for s, n in activity_counts.items() if n)})"
             )
 
+    kv_set(conn, "last_ingest_at", datetime.now(UTC).isoformat())
     conn.close()
     return total
