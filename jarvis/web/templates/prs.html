@@ -31,15 +31,14 @@
        style="margin-bottom:.75rem">
     <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
   </div>
-  <form hx-post="/api/settings/repo-paths"
-        hx-target="#repo-paths-list"
-        hx-swap="innerHTML"
-        hx-on:htmx:after-request="this.reset()">
-    <div style="display:flex;gap:.5rem;align-items:end">
-      <input name="path" type="text" placeholder="~/code/my-project" style="margin:0;flex:1;font-size:.85rem">
-      <button type="submit" style="font-size:.8rem;padding:.35rem .75rem">Add Path</button>
-    </div>
-  </form>
+  <button style="font-size:.8rem;padding:.35rem .75rem"
+    hx-post="/api/settings/repo-paths/browse"
+    hx-target="#repo-paths-list"
+    hx-swap="innerHTML"
+    hx-on:htmx:before-request="this.disabled=true;this.textContent='Choosing…'"
+    hx-on:htmx:after-request="this.disabled=false;this.textContent='+ Choose Folder'">
+    + Choose Folder
+  </button>
 </details>
 
 {% if not subscriptions %}
