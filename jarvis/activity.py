@@ -195,27 +195,73 @@ def collect_thunderbird(
             continue
 
         try:
-            # Thunderbird schema varies — check available columns first
-            cols = {row[1] for row in tb_conn.execute("PRAGMA table_info(messages)")}
-            subject_col = (
-                "subject" if "subject" in cols else ("Subject" if "Subject" in cols else None)
-            )
-            if subject_col is None or "date" not in cols:
+            # Modern Thunderbird stores subject/author in messagesText_content FTS table.
+            # Older versions had subject/author directly on messages.
+            fts_cols = {r[1] for r in tb_conn.execute("PRAGMA table_info(messagesText_content)")}
+            use_fts = "c1subject" in fts_cols and "c3author" in fts_cols
+
+            msg_cols = {r[1] for r in tb_conn.execute("PRAGMA table_info(messages)")}
+            if "date" not in msg_cols:
                 logger.debug("thunderbird: unexpected schema in %s, skipping", profile_dir.name)
                 tb_conn.close()
                 continue
-            query = (
-                f"SELECT {subject_col} as subject, author, date, folderURI FROM messages "
-                "WHERE date > ? AND (junkscore IS NULL OR junkscore < 50)"
-            )
+
+            if use_fts:
+                query = (
+                    "SELECT m.id, m.date, m.folderID, "
+                    "t.c1subject as subject, t.c3author as author "
+                    "FROM messages m "
+                    "JOIN messagesText_content t ON t.docid = m.id "
+                    "WHERE m.date > ? AND m.deleted = 0"
+                )
+            else:
+                subject_col = (
+                    "subject"
+                    if "subject" in msg_cols
+                    else ("Subject" if "Subject" in msg_cols else None)
+                )
+                if subject_col is None or "author" not in msg_cols:
+                    logger.debug("thunderbird: no subject/author in %s, skipping", profile_dir.name)
+                    tb_conn.close()
+                    continue
+                # Old schemas store folderURI directly; modern ones use folderID + folderLocations
+                has_folder_uri = "folderURI" in msg_cols
+                has_folder_id = "folderID" in msg_cols
+                if has_folder_uri:
+                    folder_col = "folderURI as folderURI_direct"
+                elif has_folder_id:
+                    folder_col = "folderID"
+                else:
+                    folder_col = "NULL as folderID"
+                query = (
+                    f"SELECT id, date, {folder_col}, {subject_col} as subject, author "
+                    "FROM messages WHERE date > ? AND "
+                    "(junkscore IS NULL OR junkscore < 50)"
+                )
+
             params: list = [since_ms]
             if until_ms:
-                query += " AND date <= ?"
+                query += " AND m.date <= ?" if use_fts else " AND date <= ?"
                 params.append(until_ms)
 
+            # Build folderID → folderURI map to filter spam folders
+            try:
+                folder_map = {
+                    r[0]: r[1] for r in tb_conn.execute("SELECT id, folderURI FROM folderLocations")
+                }
+            except sqlite3.OperationalError:
+                folder_map = {}
+
             for row in tb_conn.execute(query, params):
-                folder = (row["folderURI"] or "").rstrip("/").split("/")[-1].lower()
-                if folder in _SPAM_FOLDERS:
+                # Handle both schema variants: direct folderURI or folderID lookup
+                if not use_fts and "folderURI_direct" in row.keys():
+                    folder_uri = row["folderURI_direct"] or ""
+                else:
+                    folder_uri = (
+                        folder_map.get(row["folderID"], "") if "folderID" in row.keys() else ""
+                    )
+                folder_name = folder_uri.rstrip("/").split("/")[-1].lower()
+                if folder_name in _SPAM_FOLDERS:
                     continue
 
                 msg_dt = datetime.fromtimestamp(row["date"] / 1000, tz=UTC)
@@ -238,6 +284,46 @@ def collect_thunderbird(
             tb_conn.close()
 
     return inserted
+
+
+# ---------------------------------------------------------------------------
+# Profile discovery
+# ---------------------------------------------------------------------------
+
+
+def discover_firefox_profiles() -> list[dict]:
+    """Return all Firefox profiles with their stem, detected name, and places.sqlite presence."""
+    if not _FIREFOX_PROFILES.exists():
+        return []
+    profiles = []
+    for profile_dir in sorted(_FIREFOX_PROFILES.iterdir()):
+        if not profile_dir.is_dir():
+            continue
+        stem = profile_dir.name
+        # Try to read display name from prefs.js
+        prefs = profile_dir / "prefs.js"
+        name = stem
+        if prefs.exists():
+            m = _PROFILE_NAME_RE.search(prefs.read_text(errors="replace"))
+            if m:
+                name = m.group(1)
+        has_history = (profile_dir / "places.sqlite").exists()
+        profiles.append({"path": stem, "name": name, "has_history": has_history})
+    return profiles
+
+
+def discover_thunderbird_profiles() -> list[dict]:
+    """Return all Thunderbird profiles with their stem and db presence."""
+    if not _THUNDERBIRD_PROFILES.exists():
+        return []
+    profiles = []
+    for profile_dir in sorted(_THUNDERBIRD_PROFILES.iterdir()):
+        if not profile_dir.is_dir():
+            continue
+        stem = profile_dir.name
+        has_db = (profile_dir / "global-messages-db.sqlite").exists()
+        profiles.append({"path": stem, "has_db": has_db})
+    return profiles
 
 
 # ---------------------------------------------------------------------------

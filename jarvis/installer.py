@@ -156,7 +156,11 @@ def run_install() -> None:
             "Install it from https://claude.ai/code to enable AI features."
         )
 
-    # 5. Autostart
+    # 5. Profile discovery
+    console.print()
+    setup_profiles(console=console, interactive=True)
+
+    # 6. Autostart
     console.print()
     if typer.confirm("Start Jarvis automatically at login (menu bar + background agents)?"):
         install_launchd_agents()
@@ -178,6 +182,84 @@ def run_install() -> None:
             expand=False,
         )
     )
+
+
+def setup_profiles(console=None, interactive: bool = True) -> None:
+    """Discover Firefox and Thunderbird profiles and prompt user to label them."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from jarvis.activity import discover_firefox_profiles, discover_thunderbird_profiles
+    from jarvis.config import CONFIG_PATH
+
+    con = console or Console()
+
+    ff_profiles = [p for p in discover_firefox_profiles() if p["has_history"]]
+    tb_profiles = [p for p in discover_thunderbird_profiles() if p["has_db"]]
+
+    if not ff_profiles and not tb_profiles:
+        con.print("[dim]No Firefox or Thunderbird profiles found.[/dim]")
+        return
+
+    # Show discovered profiles
+    if ff_profiles:
+        t = Table(title="Firefox profiles found", show_header=True)
+        t.add_column("#", width=3)
+        t.add_column("Path stem")
+        t.add_column("Detected name")
+        for i, p in enumerate(ff_profiles, 1):
+            t.add_row(str(i), p["path"], p["name"])
+        con.print(t)
+
+    if tb_profiles:
+        t = Table(title="Thunderbird profiles found", show_header=True)
+        t.add_column("#", width=3)
+        t.add_column("Path stem")
+        for i, p in enumerate(tb_profiles, 1):
+            t.add_row(str(i), p["path"])
+        con.print(t)
+
+    if not interactive:
+        return
+
+    # Read existing config
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    data: dict = {}
+    if CONFIG_PATH.exists():
+        with open(CONFIG_PATH, "rb") as f:
+            data = tomllib.load(f)
+
+    # Label Firefox profiles
+    if ff_profiles:
+        con.print("\nLabel Firefox profiles (Enter to keep detected name, skip to exclude):")
+        labeled: list[dict] = []
+        for p in ff_profiles:
+            import typer
+
+            label = typer.prompt(f"  '{p['name']}' label", default=p["name"])
+            if label.lower() != "skip":
+                labeled.append({"path": p["path"], "label": label})
+        if labeled:
+            data.setdefault("firefox", {})["profiles"] = labeled
+            con.print(f"[green]✓[/green] {len(labeled)} Firefox profile(s) saved")
+
+    # Work domains for Thunderbird
+    if tb_profiles:
+        con.print("\nThunderbird work email domains (comma-separated, e.g. mycompany.com):")
+        import typer
+
+        domains_input = typer.prompt("  Work domains", default="")
+        domains = [d.strip() for d in domains_input.split(",") if d.strip()]
+        if domains:
+            data.setdefault("thunderbird", {})["work_domains"] = domains
+            con.print(f"[green]✓[/green] Work domains saved: {', '.join(domains)}")
+
+    if data:
+        _write_toml(CONFIG_PATH, data)
 
 
 def _write_toml(path: Path, data: dict) -> None:

@@ -68,3 +68,12 @@ ActivityTracker collects activity events from four sources and upserts them into
 ### F13. Thunderbird collector skips spam and deleted messages
 
 **WHEN** the Thunderbird collector processes a message **THEN** it **SHALL** skip any message with a junk score of 50 or above, or whose folder name is any of `Spam`, `Junk`, `Trash`, `Deleted Items`, or `Deleted` (case-insensitive). Skipped messages **SHALL NOT** be inserted into `activity_log`.
+
+
+### F14. Firefox profile discovery
+
+**WHEN** `discover_firefox_profiles` is called **THEN** it **SHALL** return a list of dicts, one per profile directory under the macOS Firefox profiles path, each containing the directory stem, the detected display name, and a boolean indicating whether `places.sqlite` is present.
+
+### F15. Thunderbird profile discovery
+
+**WHEN** `discover_thunderbird_profiles` is called **THEN** it **SHALL** return a list of dicts, one per profile directory under the macOS Thunderbird profiles path, each containing the directory stem and a boolean indicating whether `global-messages-db.sqlite` is present.
