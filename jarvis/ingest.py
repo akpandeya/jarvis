@@ -90,5 +90,17 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
     if merges:
         console.print(f"  [blue]resolved[/blue] {merges} duplicate entities")
 
+    # Collect computer-wide activity
+    if source_filter in (None, "activity"):
+        from jarvis.activity import collect_all
+
+        activity_counts = collect_all(conn, since, config=config)
+        activity_total = sum(activity_counts.values())
+        if activity_total:
+            console.print(
+                f"  [green]activity[/green] {activity_total} new rows "
+                f"({', '.join(f'{s}:{n}' for s, n in activity_counts.items() if n)})"
+            )
+
     conn.close()
     return total

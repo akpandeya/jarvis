@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+
+# Forward-declared here to avoid circular imports at the call site
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -9,6 +12,14 @@ from ulid import ULID
 
 from jarvis.config import DB_PATH
 from jarvis.models import Event
+
+
+@dataclass
+class Suggestion:
+    rule_id: str
+    message: str
+    action: str
+    priority: int
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -21,10 +32,11 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path | None = None) -> None:
-    """Create all tables from the migration file."""
+    """Run all migrations in order."""
     conn = _connect(db_path)
-    migration = Path(__file__).parent.parent / "migrations" / "001_initial.sql"
-    conn.executescript(migration.read_text())
+    migrations_dir = Path(__file__).parent.parent / "migrations"
+    for migration in sorted(migrations_dir.glob("*.sql")):
+        conn.executescript(migration.read_text())
     conn.close()
 
 
@@ -141,6 +153,118 @@ def search_events(conn: sqlite3.Connection, query: str, limit: int = 20) -> list
 def event_count(conn: sqlite3.Connection) -> int:
     row = conn.execute("SELECT COUNT(*) as cnt FROM events").fetchone()
     return row["cnt"]
+
+
+# --- Activity log ---
+
+
+def insert_activity(
+    conn: sqlite3.Connection,
+    source: str,
+    kind: str,
+    happened_at: datetime,
+    title: str | None = None,
+    body: str | None = None,
+    url: str | None = None,
+    metadata: dict | None = None,
+) -> bool:
+    """Insert an activity row. Returns True if a new row was inserted."""
+    row_id = str(ULID())
+    meta_json = json.dumps(metadata) if metadata else None
+    cursor = conn.execute(
+        """INSERT OR IGNORE INTO activity_log
+           (id, source, kind, title, body, url, happened_at, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (row_id, source, kind, title, body, url, happened_at.isoformat(), meta_json),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
+def query_activity(
+    conn: sqlite3.Connection,
+    source: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    conditions = []
+    params: list = []
+    if source:
+        conditions.append("source = ?")
+        params.append(source)
+    if since:
+        conditions.append("happened_at >= ?")
+        params.append(since.isoformat())
+    if until:
+        conditions.append("happened_at <= ?")
+        params.append(until.isoformat())
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+    rows = conn.execute(
+        f"SELECT * FROM activity_log {where} ORDER BY happened_at DESC LIMIT ?", params
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def command_frequency(conn: sqlite3.Connection, days: int = 30) -> dict[str, int]:
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    rows = conn.execute(
+        """SELECT title, COUNT(*) as cnt FROM activity_log
+           WHERE source='jarvis_cli' AND happened_at >= ?
+           GROUP BY title ORDER BY cnt DESC""",
+        (since,),
+    ).fetchall()
+    return {r["title"]: r["cnt"] for r in rows}
+
+
+# --- Suggestions ---
+
+
+def upsert_suggestion(conn: sqlite3.Connection, suggestion: Suggestion) -> None:
+    now = datetime.now().isoformat()
+    conn.execute(
+        """INSERT INTO suggestions (id, rule_id, message, action, priority, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(rule_id) DO UPDATE SET
+               message=excluded.message,
+               action=excluded.action,
+               priority=excluded.priority""",
+        (
+            str(ULID()),
+            suggestion.rule_id,
+            suggestion.message,
+            suggestion.action,
+            suggestion.priority,
+            now,
+        ),
+    )
+    conn.commit()
+
+
+def get_pending_suggestions(conn: sqlite3.Connection) -> list[Suggestion]:
+    now = datetime.now().isoformat()
+    rows = conn.execute(
+        """SELECT rule_id, message, action, priority FROM suggestions
+           WHERE dismissed = 0
+             AND (snoozed_until IS NULL OR snoozed_until < ?)
+           ORDER BY priority DESC""",
+        (now,),
+    ).fetchall()
+    return [Suggestion(**dict(r)) for r in rows]
+
+
+def dismiss_suggestion(conn: sqlite3.Connection, rule_id: str) -> None:
+    conn.execute("UPDATE suggestions SET dismissed = 1 WHERE rule_id = ?", (rule_id,))
+    conn.commit()
+
+
+def snooze_suggestion(conn: sqlite3.Connection, rule_id: str, until: datetime) -> None:
+    conn.execute(
+        "UPDATE suggestions SET snoozed_until = ? WHERE rule_id = ?",
+        (until.isoformat(), rule_id),
+    )
+    conn.commit()
 
 
 # --- Sessions ---

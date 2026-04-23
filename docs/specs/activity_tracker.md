@@ -59,7 +59,7 @@ ActivityTracker collects activity events from four sources and upserts them into
 
 ### F11. Thunderbird account context is derived from sender domain
 
-**WHEN** the Thunderbird collector inserts a row **THEN** it **SHALL** set the account context in metadata to `work` if the sender's email domain matches any domain listed under `[thunderbird] work_domains` in `~/.jarvis/config.toml` (default: `hellofresh.de`), otherwise `personal`.
+**WHEN** the Thunderbird collector inserts a row **THEN** it **SHALL** set the account context in metadata to `work` if the sender's email domain matches any domain listed under `[thunderbird] work_domains` in `~/.jarvis/config.toml`. When no domains are configured, all emails are labelled `personal`.
 
 ### F12. Collectors respect an optional upper time bound
 

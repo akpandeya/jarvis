@@ -38,12 +38,27 @@ class KafkaConfig(BaseModel):
     enabled: bool = True  # parses shell history for hfkcat/kcat commands
 
 
+class FirefoxProfileConfig(BaseModel):
+    path: str  # profile directory stem (the hash-prefixed folder name under Profiles/)
+    label: str  # human label to store in metadata, e.g. "Work"
+
+
+class FirefoxConfig(BaseModel):
+    profiles: list[FirefoxProfileConfig] = Field(default_factory=list)
+
+
+class ThunderbirdConfig(BaseModel):
+    work_domains: list[str] = Field(default_factory=list)
+
+
 class JarvisConfig(BaseModel):
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     git_local: GitLocalConfig = Field(default_factory=GitLocalConfig)
     jira: JiraConfig = Field(default_factory=JiraConfig)
     gcal: GCalConfig = Field(default_factory=GCalConfig)
     kafka: KafkaConfig = Field(default_factory=KafkaConfig)
+    firefox: FirefoxConfig = Field(default_factory=FirefoxConfig)
+    thunderbird: ThunderbirdConfig = Field(default_factory=ThunderbirdConfig)
 
     @classmethod
     def load(cls) -> JarvisConfig:
@@ -81,6 +96,16 @@ credentials_path = ""
 
 [kafka]
 enabled = true  # parses shell history for hfkcat/kcat commands
+
+[firefox]
+# Optional: label Firefox profiles. path = profile directory stem.
+# [[firefox.profiles]]
+# path = "xxxxxxxx.default-release"
+# label = "Work"
+
+[thunderbird]
+# Set your work email domains so Jarvis can label emails correctly.
+# work_domains = ["yourcompany.com"]
 
 """
 

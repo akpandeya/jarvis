@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
+import time
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from jarvis.config import CONFIG_PATH, DB_PATH, JARVIS_HOME, JarvisConfig, ensure_jarvis_home
@@ -11,6 +14,33 @@ from jarvis.db import event_count, get_db, init_db, query_events, search_events
 
 app = typer.Typer(help="Jarvis — Personal engineering assistant")
 console = Console()
+
+
+def _track_and_suggest(command: str, t0: float, exit_code: int) -> None:
+    """Record CLI usage and show top pending suggestion. Best-effort — never raises."""
+    try:
+        from jarvis.activity import record_cli
+        from jarvis.suggestions import evaluate_all, get_pending
+
+        conn = get_db()
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        record_cli(conn, command, sys.argv[1:], None, duration_ms, exit_code)
+        evaluate_all(conn)
+        pending = get_pending(conn)
+        conn.close()
+        if pending:
+            top = pending[0]
+            console.print(
+                Panel(
+                    f"[bold]{top.message}[/bold]\n[dim]Run:[/dim] [cyan]{top.action}[/cyan]"
+                    f"\n[dim]Dismiss:[/dim] jarvis suggest dismiss {top.rule_id}",
+                    title="[yellow]💡 Suggestion[/yellow]",
+                    border_style="dim",
+                    padding=(0, 1),
+                )
+            )
+    except Exception:
+        pass
 
 
 @app.command()
@@ -36,6 +66,7 @@ def ingest(
     source: str | None = typer.Option(None, help="Only ingest from this source"),
 ) -> None:
     """Pull latest events from all configured integrations."""
+    t0 = time.monotonic()
     ensure_jarvis_home()
     from jarvis.ingest import ingest_all
 
@@ -45,6 +76,7 @@ def ingest(
     total_db = event_count(conn)
     console.print(f"\n[green]Done.[/green] {total} events ingested. Total in DB: {total_db}")
     conn.close()
+    _track_and_suggest("ingest", t0, 0)
 
 
 @app.command()
@@ -55,6 +87,7 @@ def log(
     limit: int = typer.Option(30, help="Max events to show"),
 ) -> None:
     """Show recent activity events."""
+    t0 = time.monotonic()
     conn = get_db()
     events = query_events(conn, source=source, project=project, days=days, limit=limit)
     conn.close()
@@ -89,6 +122,7 @@ def log(
         )
 
     console.print(table)
+    _track_and_suggest("log", t0, 0)
 
 
 @app.command()
@@ -410,6 +444,67 @@ def people(
         table.add_row(p["name"], aliases or "-", str(p["event_count"]))
 
     console.print(table)
+
+
+# --- Suggest subcommands ---
+
+suggest_app = typer.Typer(help="Manage proactive suggestions")
+app.add_typer(suggest_app, name="suggest")
+
+
+@suggest_app.callback(invoke_without_command=True)
+def suggest_default(ctx: typer.Context) -> None:
+    """Show pending suggestions."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from jarvis.suggestions import evaluate_all, get_pending
+
+    conn = get_db()
+    evaluate_all(conn)
+    pending = get_pending(conn)
+    conn.close()
+
+    if not pending:
+        console.print("[green]No suggestions right now.[/green]")
+        return
+
+    table = Table(title=f"Suggestions ({len(pending)})")
+    table.add_column("ID", style="dim", width=20)
+    table.add_column("Priority", justify="right", width=8)
+    table.add_column("Message", no_wrap=False)
+    table.add_column("Action", style="cyan", no_wrap=False)
+
+    for s in pending:
+        table.add_row(s.rule_id, str(s.priority), s.message, s.action)
+
+    console.print(table)
+
+
+@suggest_app.command("dismiss")
+def suggest_dismiss(
+    rule_id: str = typer.Argument(..., help="Rule ID to dismiss"),
+) -> None:
+    """Dismiss a suggestion so it no longer appears."""
+    from jarvis.suggestions import dismiss
+
+    conn = get_db()
+    dismiss(conn, rule_id)
+    conn.close()
+    console.print(f"[green]Dismissed:[/green] {rule_id}")
+
+
+@suggest_app.command("snooze")
+def suggest_snooze(
+    rule_id: str = typer.Argument(..., help="Rule ID to snooze"),
+    minutes: int = typer.Option(60, help="Snooze for this many minutes"),
+) -> None:
+    """Snooze a suggestion for a given number of minutes."""
+    from jarvis.suggestions import snooze
+
+    conn = get_db()
+    snooze(conn, rule_id, minutes=minutes)
+    conn.close()
+    console.print(f"[green]Snoozed[/green] {rule_id} for {minutes} minutes.")
 
 
 # --- Schedule subcommands ---

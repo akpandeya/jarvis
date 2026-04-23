@@ -155,6 +155,21 @@ def insights_page(
     return templates.TemplateResponse(request, "insights.html", ctx)
 
 
+@app.get("/api/suggestions")
+def api_suggestions():
+    """Return pending suggestions as JSON."""
+    from jarvis.suggestions import evaluate_all, get_pending
+
+    conn = get_db()
+    evaluate_all(conn)
+    pending = get_pending(conn)
+    conn.close()
+    return [
+        {"rule_id": s.rule_id, "message": s.message, "action": s.action, "priority": s.priority}
+        for s in pending
+    ]
+
+
 @app.get("/sessions", response_class=HTMLResponse)
 def sessions_page(
     request: Request,
