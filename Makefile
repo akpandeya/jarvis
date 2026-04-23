@@ -4,6 +4,7 @@
 # After this, `jarvis` is available in any terminal without activating a venv.
 install:
 	uv tool install . --force
+	mkdir -p ~/.jarvis && echo "$$(pwd)" > ~/.jarvis/repo_path
 
 # Set up a dev virtualenv (for running tests / IDE support).
 dev:
