@@ -364,3 +364,26 @@ def list_sessions(
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- Repo paths ---
+
+
+def list_repo_paths(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM repo_paths ORDER BY added_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_repo_path(conn: sqlite3.Connection, path: str) -> str:
+    row_id = str(ULID())
+    conn.execute(
+        "INSERT OR IGNORE INTO repo_paths (id, path, added_at) VALUES (?, ?, ?)",
+        (row_id, path, datetime.now().isoformat()),
+    )
+    conn.commit()
+    return row_id
+
+
+def delete_repo_path(conn: sqlite3.Connection, path_id: str) -> None:
+    conn.execute("DELETE FROM repo_paths WHERE id = ?", (path_id,))
+    conn.commit()
