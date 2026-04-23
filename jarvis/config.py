@@ -51,6 +51,13 @@ class ThunderbirdConfig(BaseModel):
     work_domains: list[str] = Field(default_factory=list)
 
 
+class PrMonitorConfig(BaseModel):
+    account_keys: list[str] = Field(default_factory=lambda: ["github_token"])
+    staging_patterns: list[str] = Field(default_factory=lambda: ["staging", "stg", "stage"])
+    max_files: int = 10
+    max_lines: int = 500
+
+
 class JarvisConfig(BaseModel):
     github: GitHubConfig = Field(default_factory=GitHubConfig)
     git_local: GitLocalConfig = Field(default_factory=GitLocalConfig)
@@ -59,6 +66,7 @@ class JarvisConfig(BaseModel):
     kafka: KafkaConfig = Field(default_factory=KafkaConfig)
     firefox: FirefoxConfig = Field(default_factory=FirefoxConfig)
     thunderbird: ThunderbirdConfig = Field(default_factory=ThunderbirdConfig)
+    pr_monitor: PrMonitorConfig = Field(default_factory=PrMonitorConfig)
 
     @classmethod
     def load(cls) -> JarvisConfig:
@@ -106,6 +114,15 @@ enabled = true  # parses shell history for hfkcat/kcat commands
 [thunderbird]
 # Set your work email domains so Jarvis can label emails correctly.
 # work_domains = ["yourcompany.com"]
+
+[pr_monitor]
+# GitHub keychain key names (one per account). Each must hold a token via `jarvis setup`.
+account_keys = ["github_token"]
+# Environment name substrings that count as staging.
+staging_patterns = ["staging", "stg", "stage"]
+# Oversized PR thresholds.
+max_files = 10
+max_lines = 500
 
 """
 

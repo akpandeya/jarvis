@@ -507,6 +507,147 @@ def suggest_snooze(
     console.print(f"[green]Snoozed[/green] {rule_id} for {minutes} minutes.")
 
 
+# --- PR Monitor subcommands ---
+
+pr_app = typer.Typer(help="Monitor open pull requests")
+app.add_typer(pr_app, name="pr")
+
+_PR_MONITOR_PLIST_NAME = "com.jarvis.pr_monitor"
+_PR_MONITOR_PLIST_PATH = (
+    Path.home() / "Library" / "LaunchAgents" / f"{_PR_MONITOR_PLIST_NAME}.plist"
+)
+
+
+@pr_app.command("monitor")
+def pr_monitor_run(
+    repo: list[str] = typer.Option([], help="Override repos (repeatable)"),
+) -> None:
+    """Run the PR monitor now and surface suggestions."""
+    from jarvis.config import JarvisConfig
+    from jarvis.pr_monitor import run_monitor
+
+    cfg = JarvisConfig.load()
+    conn = get_db()
+    counts = run_monitor(
+        conn,
+        account_keys=cfg.pr_monitor.account_keys,
+        repos=list(repo) or None,
+        max_files=cfg.pr_monitor.max_files,
+        max_lines=cfg.pr_monitor.max_lines,
+        staging_patterns=cfg.pr_monitor.staging_patterns,
+    )
+    conn.close()
+
+    console.print(
+        f"Checked [bold]{counts['prs_checked']}[/bold] PRs — "
+        f"CI failures: {counts['ci_failures']}, "
+        f"review comments: {counts['review_comments']}, "
+        f"ready to merge: {counts['ready_to_merge']}, "
+        f"oversized: {counts['oversized']}, "
+        f"staging deploys: {counts['staging_deploys']}"
+    )
+
+
+@pr_app.command("status")
+def pr_status() -> None:
+    """Show a table of open PRs across all configured accounts."""
+    from jarvis.config import JarvisConfig
+    from jarvis.pr_monitor import list_open_prs
+
+    cfg = JarvisConfig.load()
+    prs = list_open_prs(account_keys=cfg.pr_monitor.account_keys)
+
+    if not prs:
+        console.print("[yellow]No open PRs found.[/yellow]")
+        return
+
+    table = Table(title=f"Open PRs ({len(prs)})")
+    table.add_column("Repo", no_wrap=True)
+    table.add_column("#", justify="right", width=6)
+    table.add_column("Title", no_wrap=False)
+    table.add_column("Author", width=16)
+    table.add_column("CI", width=8)
+    table.add_column("Files", justify="right", width=6)
+
+    ci_style = {"passing": "green", "failing": "red", "pending": "yellow", "unknown": "dim"}
+    for pr in prs:
+        draft_tag = " [dim](draft)[/dim]" if pr["draft"] else ""
+        ci = pr["ci"]
+        table.add_row(
+            pr["repo"],
+            str(pr["number"]),
+            f"{pr['title'][:60]}{draft_tag}",
+            pr["author"],
+            f"[{ci_style.get(ci, 'dim')}]{ci}[/{ci_style.get(ci, 'dim')}]",
+            str(pr["changed_files"]),
+        )
+
+    console.print(table)
+
+
+@pr_app.command("fix")
+def pr_fix(
+    pr_number: int = typer.Argument(..., help="PR number to fix"),
+    repo: str = typer.Option("", help="Repo (owner/name). Inferred from config if omitted."),
+) -> None:
+    """Show LLM-proposed fix for a failing CI check and optionally push a commit."""
+    import keyring
+
+    from jarvis.config import JarvisConfig
+    from jarvis.pr_monitor import _check_ci_failure, _get
+
+    cfg = JarvisConfig.load()
+    token = None
+    for key in cfg.pr_monitor.account_keys:
+        t = keyring.get_password("jarvis", key)
+        if t:
+            token = t
+            break
+
+    if not token:
+        console.print("[red]No GitHub token found in keychain.[/red]")
+        raise typer.Exit(1)
+
+    target_repo = repo or (cfg.github.repos[0] if cfg.github.repos else "")
+    if not target_repo:
+        console.print("[red]Specify --repo or configure [github] repos in config.[/red]")
+        raise typer.Exit(1)
+
+    from jarvis.db import API  # type: ignore[attr-defined]  # noqa: F401
+    from jarvis.pr_monitor import API as GH_API
+
+    pr = _get(f"{GH_API}/repos/{target_repo}/pulls/{pr_number}", token)
+    if not pr:
+        console.print(f"[red]PR #{pr_number} not found in {target_repo}.[/red]")
+        raise typer.Exit(1)
+
+    conn = get_db()
+    suggestion = _check_ci_failure(conn, target_repo, pr, token)
+    conn.close()
+
+    if not suggestion:
+        console.print(f"[green]No CI failure detected on PR #{pr_number}.[/green]")
+        return
+
+    console.print(f"\n[bold]CI Failure — PR #{pr_number}[/bold]\n")
+    console.print(suggestion.message)
+    console.print()
+
+    push = typer.confirm("Push a fix commit to this branch?", default=False)
+    if not push:
+        return
+
+    branch = pr.get("head", {}).get("ref", "")
+    if not branch:
+        console.print("[red]Could not determine branch name.[/red]")
+        raise typer.Exit(1)
+
+    console.print(
+        f"[yellow]Clone or switch to the branch '{branch}' and apply the fix manually,[/yellow]\n"
+        "[yellow]then run `git push`. Auto-commit is not implemented yet.[/yellow]"
+    )
+
+
 # --- Schedule subcommands ---
 
 schedule_app = typer.Typer(help="Manage automatic ingestion schedule")
