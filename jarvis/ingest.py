@@ -8,6 +8,7 @@ from rich.console import Console
 from jarvis.config import JarvisConfig
 from jarvis.db import get_db, link_event_entity, upsert_entity, upsert_event
 from jarvis.integrations.base import RawEvent
+from jarvis.integrations.claude_sessions import ClaudeSessions
 from jarvis.integrations.gcal import GCal
 from jarvis.integrations.git_local import GitLocal
 from jarvis.integrations.github import GitHub
@@ -62,6 +63,9 @@ def ingest_all(days: int = 7, source_filter: str | None = None) -> int:
 
     if config.kafka.enabled and source_filter in (None, "kafka"):
         integrations.append(Kafka())
+
+    if source_filter in (None, "claude_sessions"):
+        integrations.append(ClaudeSessions())
 
     for integration in integrations:
         name = integration.name

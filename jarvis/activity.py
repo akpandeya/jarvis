@@ -88,7 +88,8 @@ def _open_firefox_db(db_path: Path) -> sqlite3.Connection | None:
         conn._tmp_path = tmp  # type: ignore[attr-defined]
         return conn
     except Exception as e:
-        logger.warning("firefox: could not open %s: %s", db_path, e)
+        # Silently skip profiles that lack the expected schema (e.g. empty/uninitialised profiles)
+        logger.debug("firefox: skipping %s: %s", db_path, e)
         return None
 
 
@@ -194,8 +195,17 @@ def collect_thunderbird(
             continue
 
         try:
+            # Thunderbird schema varies — check available columns first
+            cols = {row[1] for row in tb_conn.execute("PRAGMA table_info(messages)")}
+            subject_col = (
+                "subject" if "subject" in cols else ("Subject" if "Subject" in cols else None)
+            )
+            if subject_col is None or "date" not in cols:
+                logger.debug("thunderbird: unexpected schema in %s, skipping", profile_dir.name)
+                tb_conn.close()
+                continue
             query = (
-                "SELECT subject, author, date, folderURI FROM messages "
+                f"SELECT {subject_col} as subject, author, date, folderURI FROM messages "
                 "WHERE date > ? AND (junkscore IS NULL OR junkscore < 50)"
             )
             params: list = [since_ms]

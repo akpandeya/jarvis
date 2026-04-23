@@ -12,8 +12,18 @@ from rich.table import Table
 from jarvis.config import CONFIG_PATH, DB_PATH, JARVIS_HOME, JarvisConfig, ensure_jarvis_home
 from jarvis.db import event_count, get_db, init_db, query_events, search_events
 
-app = typer.Typer(help="Jarvis — Personal engineering assistant")
+app = typer.Typer(help="Jarvis — Personal engineering assistant", invoke_without_command=True)
 console = Console()
+
+
+@app.callback(invoke_without_command=True)
+def default(ctx: typer.Context) -> None:
+    """Start Jarvis: menu bar icon + web dashboard (non-blocking)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from jarvis.launcher import launch
+
+    launch()
 
 
 def _track_and_suggest(command: str, t0: float, exit_code: int) -> None:
