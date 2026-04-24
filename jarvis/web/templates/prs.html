@@ -285,12 +285,14 @@
       .forEach(c => list.appendChild(c));
   }
   document.querySelectorAll('.priority-slider').forEach(slider => {
+    // Update the number label live while dragging — no reorder yet
     slider.addEventListener('input', () => {
       slider.nextElementSibling.textContent = slider.value;
+    });
+    // Reorder + save only when the user releases the slider
+    slider.addEventListener('change', () => {
       slider.closest('.pr-card').dataset.priority = slider.value;
       sortCards();
-    });
-    slider.addEventListener('change', () => {
       const fd = new FormData();
       fd.append('priority', slider.value);
       fetch(`/api/prs/${slider.dataset.repo}/${slider.dataset.pr}/priority`,

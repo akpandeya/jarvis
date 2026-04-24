@@ -997,7 +997,10 @@ def api_prs_discover():
         _subscription_upsert(conn2, pr["repo"], pr["number"], pr, gh_username=gh_username)
         ci = _parse_ci_status(pr)
         rd = pr.get("reviewDecision") or ""
-        update_pr_cache(conn2, pr["repo"], pr["number"], ci, rd)
+        pr_state = (pr.get("state") or "").lower()
+        update_pr_cache(conn2, pr["repo"], pr["number"], ci, rd, state=pr_state or None)
+        if pr_state in ("merged", "closed"):
+            set_pr_watch_state(conn2, pr["repo"], pr["number"], "dismissed")
     conn2.close()
 
     new_count = len(prs)
@@ -1302,6 +1305,9 @@ def api_pr_refresh(repo_encoded: str, pr_number: int):
             pr_url=data.get("url"),
             state=(data.get("state") or "").lower() or None,
         )
+        pr_state = (data.get("state") or "").lower()
+        if pr_state in ("merged", "closed"):
+            set_pr_watch_state(conn, repo, pr_number, "dismissed")
         sub = {"ci_badge": _ci_badge(ci), "review_badge": _review_badge(rd)}
     else:
         sub = {"ci_badge": '<span style="color:#f87171">error</span>', "review_badge": ""}
@@ -1345,6 +1351,9 @@ def api_prs_refresh_all():
                 pr_url=data.get("url"),
                 state=(data.get("state") or "").lower() or None,
             )
+            pr_state = (data.get("state") or "").lower()
+            if pr_state in ("merged", "closed"):
+                set_pr_watch_state(conn, repo, sub["pr_number"], "dismissed")
             updated += 1
     conn.close()
     return HTMLResponse(
