@@ -66,15 +66,28 @@ def upsert_event(
     url: str | None = None,
     project: str | None = None,
 ) -> str:
-    """Insert or ignore an event. Returns the event ID."""
+    """Insert or update an event. Returns the actual stored event ID."""
     event_id = str(ULID())
     meta_json = json.dumps(metadata) if metadata else None
+    happened_at_str = happened_at.isoformat()
     conn.execute(
-        """INSERT OR IGNORE INTO events
+        """INSERT INTO events
            (id, source, kind, title, body, metadata, url, happened_at, project)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (event_id, source, kind, title, body, meta_json, url, happened_at.isoformat(), project),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(source, kind, url) DO UPDATE SET
+               title=excluded.title,
+               body=excluded.body,
+               metadata=excluded.metadata,
+               happened_at=excluded.happened_at,
+               project=excluded.project""",
+        (event_id, source, kind, title, body, meta_json, url, happened_at_str, project),
     )
+    if url is not None:
+        row = conn.execute(
+            "SELECT id FROM events WHERE source=? AND kind=? AND url=?", (source, kind, url)
+        ).fetchone()
+        if row:
+            event_id = row["id"]
     conn.commit()
     return event_id
 
