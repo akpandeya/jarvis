@@ -182,7 +182,7 @@
 <div id="pr-list">
 {% for sub in watching %}
 {% set encoded = sub.repo | replace("/", "--") %}
-<article class="pr-card" id="watching-{{ encoded }}-{{ sub.pr_number }}">
+<article class="pr-card" id="watching-{{ encoded }}-{{ sub.pr_number }}" data-priority="{{ sub.priority or 0 }}">
   <div class="pr-card-header">
     <div>
       <div class="pr-title-line">
@@ -258,6 +258,15 @@
       hx-swap="outerHTML">
       – Dismiss
     </button>
+
+    <div style="display:flex;align-items:center;gap:.35rem;margin-left:auto;font-size:.75em;color:var(--pico-muted-color)">
+      <span>Priority</span>
+      <input type="range" min="0" max="10" value="{{ sub.priority or 0 }}"
+        style="width:72px;margin:0;cursor:pointer;accent-color:var(--pico-primary)"
+        data-repo="{{ encoded }}" data-pr="{{ sub.pr_number }}"
+        class="priority-slider">
+      <span class="priority-val" style="min-width:1.1em;text-align:right">{{ sub.priority or 0 }}</span>
+    </div>
   </div>
 
   <div id="detail-{{ sub.pr_number }}"></div>
@@ -265,6 +274,32 @@
 {% endfor %}
 </div>
 {% endif %}
+
+<script>
+(function() {
+  function sortCards() {
+    const list = document.getElementById('pr-list');
+    if (!list) return;
+    [...list.querySelectorAll('.pr-card')]
+      .sort((a, b) => (+(b.dataset.priority||0)) - (+(a.dataset.priority||0)))
+      .forEach(c => list.appendChild(c));
+  }
+  document.querySelectorAll('.priority-slider').forEach(slider => {
+    slider.addEventListener('input', () => {
+      slider.nextElementSibling.textContent = slider.value;
+      slider.closest('.pr-card').dataset.priority = slider.value;
+      sortCards();
+    });
+    slider.addEventListener('change', () => {
+      const fd = new FormData();
+      fd.append('priority', slider.value);
+      fetch(`/api/prs/${slider.dataset.repo}/${slider.dataset.pr}/priority`,
+            {method: 'POST', body: fd});
+    });
+  });
+  sortCards();
+})();
+</script>
 
 {# ── Later ── #}
 {% if later %}

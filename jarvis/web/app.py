@@ -19,6 +19,7 @@ from jarvis.db import (
     query_events,
     search_events,
     set_pr_chat_session,
+    set_pr_priority,
     set_pr_watch_state,
     set_repo_path_account,
     set_repo_path_enabled,
@@ -129,12 +130,7 @@ def upcoming(request: Request):
             m["happened_at_epoch"] = 0
         meetings.append(m)
 
-    active = _subscriptions_active(conn)
-    blockers = [
-        _add_badges(s)
-        for s in active
-        if s.get("ci_status") == "failed" or s.get("review_decision") == "CHANGES_REQUESTED"
-    ]
+    top_prs = [_add_badges(s) for s in subscriptions_watching(conn)[:5]]
 
     conn.close()
     return templates.TemplateResponse(
@@ -142,7 +138,7 @@ def upcoming(request: Request):
         "upcoming.html",
         {
             "meetings": meetings,
-            "blockers": blockers,
+            "top_prs": top_prs,
             "today": date.today(),
         },
     )
@@ -1063,6 +1059,15 @@ def api_prs_later(repo_encoded: str, pr_number: int):
     repo = _repo_decode(repo_encoded)
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "later")
+    conn.close()
+    return HTMLResponse("")
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/priority")
+def api_prs_priority(repo_encoded: str, pr_number: int, priority: int = Form(0)):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_priority(conn, repo, pr_number, priority)
     conn.close()
     return HTMLResponse("")
 

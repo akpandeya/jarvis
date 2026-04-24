@@ -1,0 +1,1 @@
+ALTER TABLE pr_subscriptions ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
