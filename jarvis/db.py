@@ -39,7 +39,12 @@ def init_db(db_path: Path | None = None) -> None:
     repo_migrations = Path(__file__).parent.parent / "migrations"
     migrations_dir = pkg_migrations if pkg_migrations.exists() else repo_migrations
     for migration in sorted(migrations_dir.glob("*.sql")):
-        conn.executescript(migration.read_text())
+        try:
+            conn.executescript(migration.read_text())
+        except sqlite3.OperationalError as e:
+            # Tolerate "duplicate column" from ALTER TABLE on already-migrated DBs
+            if "duplicate column" not in str(e):
+                raise
     conn.close()
 
 
