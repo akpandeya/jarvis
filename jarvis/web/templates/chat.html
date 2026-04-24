@@ -20,6 +20,13 @@
             border:1px solid var(--pico-muted-border-color);border-radius:6px;
             padding:1rem;margin-bottom:1rem;white-space:pre-wrap;font-size:.9em;
             font-family:inherit;line-height:1.6">
+{% for turn in history %}
+  {% if turn.role == "user" %}
+  <div style="margin-bottom:.75rem"><span style="color:var(--pico-primary);font-weight:600">You</span><br>{{ turn.text }}</div>
+  {% else %}
+  <div style="margin-bottom:.75rem"><span style="color:var(--pico-secondary);font-weight:600">Claude</span><br>{{ turn.text }}</div>
+  {% endif %}
+{% endfor %}
 </div>
 
 <form id="chat-form" style="margin:0" onsubmit="return false">
@@ -37,6 +44,7 @@
 
 <script>
 const output = document.getElementById('chat-output');
+output.scrollTop = output.scrollHeight;
 const sendBtn = document.getElementById('send-btn');
 const msgArea = document.getElementById('message');
 const sessionInput = document.getElementById('session-id');
