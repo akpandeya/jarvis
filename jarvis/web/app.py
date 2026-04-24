@@ -130,7 +130,39 @@ def upcoming(request: Request):
             m["happened_at_epoch"] = 0
         meetings.append(m)
 
-    top_prs = [_add_badges(s) for s in subscriptions_watching(conn)[:5]]
+    watching_subs = subscriptions_watching(conn)[:5]
+
+    # Attach gh_account (same logic as prs_page)
+    repo_account_map: dict[str, str] = {}
+    owner_account_map: dict[str, str] = {}
+    for r in list_repo_paths(conn):
+        if not r.get("gh_account"):
+            continue
+        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+        if full_repo:
+            repo_account_map[full_repo] = r["gh_account"]
+            owner = full_repo.split("/")[0]
+            owner_account_map.setdefault(owner, r["gh_account"])
+    for s in watching_subs:
+        owner = s["repo"].split("/")[0]
+        account = repo_account_map.get(s["repo"]) or owner_account_map.get(owner, "")
+        s["gh_account"] = account
+
+    top_prs = [_add_badges(s) for s in watching_subs]
+
+    available_models = _claude_models()
+    try:
+        from jarvis.config import JarvisConfig
+
+        review_model = JarvisConfig.load().pr_monitor.review_model
+    except Exception:
+        review_model = ""
+    if not review_model or review_model in (
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ):
+        review_model = available_models[0]["id"] if available_models else "claude-opus-4-7"
 
     conn.close()
     return templates.TemplateResponse(
@@ -140,6 +172,8 @@ def upcoming(request: Request):
             "meetings": meetings,
             "top_prs": top_prs,
             "today": date.today(),
+            "review_model": review_model,
+            "available_models": available_models,
         },
     )
 

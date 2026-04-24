@@ -168,17 +168,39 @@
       {% for sub in top_prs %}
         {% set encoded = sub.repo | replace("/", "--") %}
         <div class="blocker-card">
-          <div class="blocker-title">
-            <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+          <div class="blocker-title" style="display:flex;align-items:center;gap:.4rem">
+            <button class="join-btn" style="border-color:var(--pico-muted-color);color:var(--pico-muted-color);font-size:.72rem"
+              hx-post="/api/open-url"
+              hx-vals='{"url": "{{ sub.pr_url or "" }}", "gh_account": "{{ sub.gh_account }}"}'
+              hx-swap="none">↗ GitHub</button>
+            <span style="font-weight:600;font-size:.88em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
               #{{ sub.pr_number }} {{ sub.title or "(unknown)" }}
-            </a>
+            </span>
           </div>
-          <div class="blocker-meta">
+          <div class="blocker-meta" style="margin-top:.35rem">
             <span>{{ sub.repo }}</span>
             <span>{{ sub.ci_badge | safe }}</span>
             <span>{{ sub.review_badge | safe }}</span>
             {% if sub.priority %}
               <span style="font-size:.75em;color:var(--pico-primary);font-weight:600">p{{ sub.priority }}</span>
+            {% endif %}
+            {% if sub.chat_session_id %}
+              <a href="/chat?session={{ sub.chat_session_id }}" class="join-btn" style="text-decoration:none;border-color:#7dd3fc;color:#7dd3fc">↩ Continue</a>
+              <form method="post" action="/api/prs/{{ encoded }}/{{ sub.pr_number }}/rereview" style="display:inline;margin:0">
+                <select name="model" style="font-size:.68rem;padding:.1rem .3rem;margin:0;border-radius:4px;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)">
+                  <option value="">{{ review_model }}</option>
+                  {% for m in available_models %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}
+                </select>
+                <button type="submit" class="join-btn" style="border-color:#7dd3fc;color:#7dd3fc">↻ Re-review</button>
+              </form>
+            {% else %}
+              <form method="post" action="/api/prs/{{ encoded }}/{{ sub.pr_number }}/review" style="display:inline;margin:0">
+                <select name="model" style="font-size:.68rem;padding:.1rem .3rem;margin:0;border-radius:4px;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)">
+                  <option value="">{{ review_model }}</option>
+                  {% for m in available_models %}<option value="{{ m.id }}">{{ m.label }}</option>{% endfor %}
+                </select>
+                <button type="submit" class="join-btn" style="border-color:#7dd3fc;color:#7dd3fc">Ask Claude</button>
+              </form>
             {% endif %}
           </div>
         </div>
