@@ -102,53 +102,60 @@
 
 {# ── Pending inbox ── #}
 {% if pending %}
-<div class="section-label">Pending — {{ pending | length }} new</div>
-<div style="border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.5rem 1rem;margin-bottom:.75rem">
-{% for sub in pending %}
-{% set encoded = sub.repo | replace("/", "--") %}
-<div class="pending-card" id="pending-{{ encoded }}-{{ sub.pr_number }}">
-  <div>
-    <div class="pr-title-line">
-      <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
-        {{ sub.repo }}#{{ sub.pr_number }} — {{ sub.title or "(unknown)" }}
-      </a>
+<details open style="margin-bottom:.75rem">
+  <summary class="section-label" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.4rem">
+    <span>▸</span> Pending — {{ pending | length }} new
+  </summary>
+  <div style="border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.5rem 1rem;margin-top:.4rem">
+  {% for sub in pending %}
+  {% set encoded = sub.repo | replace("/", "--") %}
+  <div class="pending-card" id="pending-{{ encoded }}-{{ sub.pr_number }}">
+    <div>
+      <div class="pr-title-line">
+        <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+          {{ sub.repo }}#{{ sub.pr_number }} — {{ sub.title or "(unknown)" }}
+        </a>
+      </div>
+      <div class="pr-meta">
+        {% if sub.author %}{{ sub.author }}{% endif %}
+        {% if sub.branch %} · <code>{{ sub.branch }}</code>{% endif %}
+      </div>
     </div>
-    <div class="pr-meta">
-      {% if sub.author %}{{ sub.author }}{% endif %}
-      {% if sub.branch %} · <code>{{ sub.branch }}</code>{% endif %}
+    <div style="display:flex;gap:.4rem">
+      <button class="btn-sm btn-sm-primary"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/watch"
+        hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML"
+        hx-on:htmx:after-request="location.reload()">
+        + Watch
+      </button>
+      <button class="btn-sm btn-sm-muted"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
+        hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML">
+        Later
+      </button>
+      <button class="btn-sm btn-sm-muted"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
+        hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML">
+        Dismiss
+      </button>
     </div>
   </div>
-  <div style="display:flex;gap:.4rem">
-    <button class="btn-sm btn-sm-primary"
-      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/watch"
-      hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
-      hx-swap="outerHTML"
-      hx-on:htmx:after-request="location.reload()">
-      + Watch
-    </button>
-    <button class="btn-sm btn-sm-muted"
-      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
-      hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
-      hx-swap="outerHTML">
-      Later
-    </button>
-    <button class="btn-sm btn-sm-muted"
-      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
-      hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
-      hx-swap="outerHTML">
-      Dismiss
-    </button>
+  {% endfor %}
   </div>
-</div>
-{% endfor %}
-</div>
+</details>
 {% endif %}
 
 {# ── Watching ── #}
-<div class="section-label">Watching{% if watching %} — {{ watching | length }}{% endif %}</div>
+<details open>
+<summary class="section-label" style="cursor:pointer;list-style:none;display:flex;align-items:center;gap:.4rem">
+  <span>▸</span> Watching{% if watching %} — {{ watching | length }}{% endif %}
+</summary>
 
 {% if watching or filter_repo or filter_author %}
-<form method="get" action="/prs" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem">
+<form method="get" action="/prs" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem;margin-top:.5rem">
   <div>
     <label style="font-size:.75em;display:block;margin-bottom:.2rem;color:var(--pico-muted-color)">Repo</label>
     <select name="repo" style="font-size:.82rem;padding:.2rem .45rem;margin:0" onchange="this.form.submit()">
@@ -274,6 +281,8 @@
 {% endfor %}
 </div>
 {% endif %}
+
+</details>
 
 <script>
 (function() {
