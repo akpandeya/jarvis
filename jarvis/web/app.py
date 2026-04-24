@@ -272,7 +272,7 @@ def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
         )
         proc.stdin.write(message)
         proc.stdin.close()
-        error_lines: list[str] = []
+        finished = False
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -280,22 +280,24 @@ def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
             try:
                 obj = json.loads(line)
                 t = obj.get("type")
-                # stream-json with --verbose emits {type:"assistant", message:{content:[{type:"text",text:"..."}]}}
+                # stream-json --verbose: {type:"assistant", message:{content:[{type:"text",text:"..."}]}}
                 if t == "assistant":
                     for block in obj.get("message", {}).get("content", []):
                         if block.get("type") == "text" and block.get("text"):
                             yield f"data: {json.dumps({'text': block['text']})}\n\n"
                 elif t == "result":
+                    finished = True
                     if obj.get("is_error"):
-                        error_lines.append(obj.get("result", "Unknown error"))
+                        yield f"data: {json.dumps({'error': obj.get('result', 'Claude returned an error')})}\n\n"
                     yield 'data: {"done": true}\n\n'
             except Exception:
                 pass
         stderr_out = proc.stderr.read().strip()
         proc.wait()
-        if proc.returncode != 0 or error_lines:
-            msg = error_lines[0] if error_lines else stderr_out or "Claude exited unexpectedly"
+        if not finished:
+            msg = stderr_out or f"claude exited with code {proc.returncode}"
             yield f"data: {json.dumps({'error': msg})}\n\n"
+            yield 'data: {"done": true}\n\n'
 
     return StreamingResponse(
         generate(),
