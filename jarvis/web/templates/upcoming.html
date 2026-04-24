@@ -93,6 +93,9 @@
     padding: 1rem 0;
     text-align: center;
   }
+  .meeting-card.past { opacity: 0.32; transition: opacity .4s; }
+  .meeting-card.past .meeting-title { text-decoration: line-through; }
+  .meeting-card.past .join-btn { pointer-events: none; }
 </style>
 
 <div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:1rem">
@@ -123,7 +126,7 @@
       {% for m in meetings %}
         {% set acct = m.account or "" %}
         {% set badge_cls = "account-work" if acct == "work" else ("account-personal" if acct == "personal" else "account-default") %}
-        <div class="meeting-card">
+        <div class="meeting-card" data-time="{{ m.happened_at_epoch }}">
           <div class="meeting-time">{{ m.time_local }}</div>
           <div class="meeting-body">
             <div class="meeting-title" title="{{ m.title }}">{{ m.title }}</div>
@@ -182,4 +185,14 @@
 
 </div>
 
+<script>
+  function markPastMeetings() {
+    const now = Date.now();
+    document.querySelectorAll('.meeting-card[data-time]').forEach(el => {
+      el.classList.toggle('past', parseInt(el.dataset.time) < now);
+    });
+  }
+  markPastMeetings();
+  setInterval(markPastMeetings, 60000);
+</script>
 {% endblock %}
