@@ -117,8 +117,10 @@ def upcoming(request: Request):
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=UTC)
             m["time_local"] = ts.astimezone(_tz).strftime("%-I:%M %p")
+            m["happened_at_epoch"] = int(ts.timestamp() * 1000)
         except Exception:
             m["time_local"] = (m["happened_at"] or "")[:16].replace("T", " ")
+            m["happened_at_epoch"] = 0
         meetings.append(m)
 
     active = _subscriptions_active(conn)
