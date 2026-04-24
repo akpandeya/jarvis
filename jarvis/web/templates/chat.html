@@ -22,17 +22,20 @@
             font-family:inherit;line-height:1.6">
 </div>
 
-<form id="chat-form" style="margin:0">
+<form id="chat-form" style="margin:0" onsubmit="return false">
   <input type="hidden" id="session-id" value="{{ session_id }}">
   <div style="display:flex;gap:.5rem;align-items:flex-end">
-    <textarea id="message" rows="3" style="flex:1;margin:0;resize:vertical"
+    <textarea id="message" rows="3"
+      style="flex:1;margin:0;resize:vertical;width:0;min-width:0"
       placeholder="Ask Claude anything… (Enter to send, Shift+Enter for newline)"></textarea>
-    <button type="submit" id="send-btn" style="margin:0;white-space:nowrap">Send</button>
+    <button type="button" id="send-btn"
+      style="margin:0;white-space:nowrap;flex-shrink:0;width:auto;padding:.5rem 1.25rem">
+      Send
+    </button>
   </div>
 </form>
 
 <script>
-const form = document.getElementById('chat-form');
 const output = document.getElementById('chat-output');
 const sendBtn = document.getElementById('send-btn');
 const msgArea = document.getElementById('message');
@@ -55,22 +58,21 @@ function startNew() {
 msgArea.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    form.dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
+    sendMessage();
   }
 });
 
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const msg = msgArea.value.trim();
-  if (!msg) return;
+sendBtn.addEventListener('click', sendMessage);
 
-  // Render user message
+async function sendMessage() {
+  const msg = msgArea.value.trim();
+  if (!msg || sendBtn.disabled) return;
+
   output.innerHTML += `<div style="margin-bottom:.75rem"><span style="color:var(--pico-primary);font-weight:600">You</span><br>${escHtml(msg)}</div>`;
   msgArea.value = '';
   sendBtn.disabled = true;
   scrollBottom();
 
-  // Placeholder for assistant response
   const assistantDiv = document.createElement('div');
   assistantDiv.style.marginBottom = '.75rem';
   assistantDiv.innerHTML = '<span style="color:var(--pico-secondary);font-weight:600">Claude</span><br>';
@@ -106,6 +108,10 @@ form.addEventListener('submit', async (e) => {
           textNode.textContent += data.text;
           scrollBottom();
         }
+        if (data.error) {
+          textNode.style.color = 'var(--pico-color-red, #f87171)';
+          textNode.textContent = `Error: ${data.error}`;
+        }
         if (data.done) {
           sendBtn.disabled = false;
           msgArea.focus();
@@ -113,10 +119,11 @@ form.addEventListener('submit', async (e) => {
       }
     }
   } catch (err) {
+    textNode.style.color = 'var(--pico-color-red, #f87171)';
     textNode.textContent = `Error: ${err.message}`;
   }
   sendBtn.disabled = false;
   scrollBottom();
-});
+}
 </script>
 {% endblock %}
