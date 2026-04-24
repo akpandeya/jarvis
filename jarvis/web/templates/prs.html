@@ -130,15 +130,11 @@
         + Watch
       </button>
       <button class="btn-sm btn-sm-muted"
-        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
-        hx-swap="none"
-        hx-on--htmx-after-request="location.reload()">
+        onclick="prAction('/api/prs/{{ encoded }}/{{ sub.pr_number }}/later', this)">
         Later
       </button>
       <button class="btn-sm btn-sm-muted"
-        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
-        hx-swap="none"
-        hx-on--htmx-after-request="location.reload()">
+        onclick="prAction('/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss', this)">
         Dismiss
       </button>
     </div>
@@ -254,15 +250,11 @@
     {% endif %}
 
     <button class="btn-sm btn-sm-muted"
-      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
-      hx-swap="none"
-      hx-on--htmx-after-request="location.reload()">
+      onclick="prAction('/api/prs/{{ encoded }}/{{ sub.pr_number }}/later', this)">
       Later
     </button>
     <button class="btn-sm btn-sm-muted"
-      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
-      hx-swap="none"
-      hx-on--htmx-after-request="location.reload()">
+      onclick="prAction('/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss', this)">
       – Dismiss
     </button>
 
@@ -402,4 +394,11 @@
 </details>
 {% endif %}
 
+<script>
+function prAction(url, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch(url, {method: 'POST'}).then(() => location.reload());
+}
+</script>
 {% endblock %}
