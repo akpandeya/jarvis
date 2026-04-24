@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+import uuid as uuid_mod
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from jarvis.db import (
@@ -210,6 +211,15 @@ def sessions_page(
 ):
     conn = get_db()
     sessions = list_sessions(conn, project=project, limit=limit)
+    claude_sessions = conn.execute(
+        """SELECT title, happened_at,
+                  json_extract(metadata,'$.session_id') as session_id,
+                  json_extract(metadata,'$.branch') as branch,
+                  json_extract(metadata,'$.cwd') as cwd,
+                  json_extract(metadata,'$.turns') as turns
+           FROM events WHERE source='claude_sessions'
+           ORDER BY happened_at DESC LIMIT 50"""
+    ).fetchall()
     conn.close()
 
     return templates.TemplateResponse(
@@ -217,8 +227,71 @@ def sessions_page(
         "sessions.html",
         {
             "sessions": sessions,
+            "claude_sessions": [dict(r) for r in claude_sessions],
             "project": project,
         },
+    )
+
+
+@app.get("/chat", response_class=HTMLResponse)
+def chat_page(request: Request, session: str | None = Query(None)):
+    history_preview = ""
+    if session:
+        conn = get_db()
+        row = conn.execute(
+            "SELECT title FROM events WHERE json_extract(metadata,'$.session_id')=? LIMIT 1",
+            (session,),
+        ).fetchone()
+        conn.close()
+        if row:
+            history_preview = row["title"]
+    return templates.TemplateResponse(
+        request,
+        "chat.html",
+        {"session_id": session or "", "history_preview": history_preview},
+    )
+
+
+@app.post("/api/chat/stream")
+def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
+    new_id = session_id or str(uuid_mod.uuid4())
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--bare"]
+    if session_id:
+        cmd += ["--resume", session_id]
+    else:
+        cmd += ["--session-id", new_id]
+
+    def generate():
+        yield f"data: {json.dumps({'session_id': new_id})}\n\n"
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        proc.stdin.write(message)
+        proc.stdin.close()
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if obj.get("type") == "content_block_delta":
+                    text = obj.get("delta", {}).get("text", "")
+                    if text:
+                        yield f"data: {json.dumps({'text': text})}\n\n"
+                elif obj.get("type") == "message_stop":
+                    yield 'data: {"done": true}\n\n'
+            except Exception:
+                pass
+        proc.wait()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
 
 

@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% set active = "chat" %}
+{% block title %}Chat{% endblock %}
+{% block content %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+  <h2 style="margin:0">Chat with Claude</h2>
+  <button class="outline" style="font-size:.75rem;padding:.25rem .75rem"
+    onclick="startNew()">+ New conversation</button>
+</div>
+
+{% if history_preview %}
+<aside style="border-left:3px solid var(--pico-primary);padding:.5rem 1rem;margin-bottom:1rem;font-size:.9em;color:var(--pico-muted-color)">
+  Resuming: <strong style="color:var(--pico-color)">{{ history_preview[:120] }}</strong>
+</aside>
+{% endif %}
+
+<div id="chat-output"
+     style="min-height:200px;max-height:60vh;overflow-y:auto;
+            border:1px solid var(--pico-muted-border-color);border-radius:6px;
+            padding:1rem;margin-bottom:1rem;white-space:pre-wrap;font-size:.9em;
+            font-family:inherit;line-height:1.6">
+</div>
+
+<form id="chat-form" style="margin:0">
+  <input type="hidden" id="session-id" value="{{ session_id }}">
+  <div style="display:flex;gap:.5rem;align-items:flex-end">
+    <textarea id="message" rows="3" style="flex:1;margin:0;resize:vertical"
+      placeholder="Ask Claude anything… (Enter to send, Shift+Enter for newline)"></textarea>
+    <button type="submit" id="send-btn" style="margin:0;white-space:nowrap">Send</button>
+  </div>
+</form>
+
+<script>
+const form = document.getElementById('chat-form');
+const output = document.getElementById('chat-output');
+const sendBtn = document.getElementById('send-btn');
+const msgArea = document.getElementById('message');
+const sessionInput = document.getElementById('session-id');
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function scrollBottom() {
+  output.scrollTop = output.scrollHeight;
+}
+
+function startNew() {
+  sessionInput.value = '';
+  output.innerHTML = '';
+  history.replaceState({}, '', '/chat');
+}
+
+msgArea.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    form.dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
+  }
+});
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const msg = msgArea.value.trim();
+  if (!msg) return;
+
+  // Render user message
+  output.innerHTML += `<div style="margin-bottom:.75rem"><span style="color:var(--pico-primary);font-weight:600">You</span><br>${escHtml(msg)}</div>`;
+  msgArea.value = '';
+  sendBtn.disabled = true;
+  scrollBottom();
+
+  // Placeholder for assistant response
+  const assistantDiv = document.createElement('div');
+  assistantDiv.style.marginBottom = '.75rem';
+  assistantDiv.innerHTML = '<span style="color:var(--pico-secondary);font-weight:600">Claude</span><br>';
+  const textNode = document.createElement('span');
+  assistantDiv.appendChild(textNode);
+  output.appendChild(assistantDiv);
+
+  const fd = new FormData();
+  fd.append('message', msg);
+  fd.append('session_id', sessionInput.value);
+
+  try {
+    const resp = await fetch('/api/chat/stream', {method: 'POST', body: fd});
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(line.slice(6)); } catch { continue; }
+        if (data.session_id && !sessionInput.value) {
+          sessionInput.value = data.session_id;
+          history.replaceState({}, '', `/chat?session=${data.session_id}`);
+        }
+        if (data.text) {
+          textNode.textContent += data.text;
+          scrollBottom();
+        }
+        if (data.done) {
+          sendBtn.disabled = false;
+          msgArea.focus();
+        }
+      }
+    }
+  } catch (err) {
+    textNode.textContent = `Error: ${err.message}`;
+  }
+  sendBtn.disabled = false;
+  scrollBottom();
+});
+</script>
+{% endblock %}

@@ -9,6 +9,10 @@
         &middot; {{ e.kind }}
         {% if e.project %}&middot; {{ e.project }}{% endif %}
         {% if e.url %}&middot; <a href="{{ e.url }}" target="_blank">link</a>{% endif %}
+        {% if e.source == 'claude_sessions' and e.metadata and e.metadata.get('session_id') %}
+        &middot; <a href="/chat?session={{ e.metadata.session_id }}"
+                   style="font-size:.8em">▶ Resume</a>
+        {% endif %}
     </div>
 </div>
 {% endfor %}
