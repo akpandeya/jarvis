@@ -23,6 +23,7 @@ from jarvis.db import (
     set_repo_path_account,
     set_repo_path_enabled,
     subscriptions_dismissed,
+    subscriptions_later,
     subscriptions_pending,
     subscriptions_watching,
     update_pr_cache,
@@ -712,6 +713,7 @@ def prs_page(
     conn = get_db()
     watching = [_add_badges(s) for s in subscriptions_watching(conn)]
     pending = subscriptions_pending(conn)
+    later = subscriptions_later(conn)
     dismissed = subscriptions_dismissed(conn)
 
     # Attach gh_account to watching subs for open-url
@@ -769,6 +771,7 @@ def prs_page(
         {
             "watching": watching,
             "pending": pending,
+            "later": later,
             "dismissed": dismissed,
             "last_checked": last_checked,
             "ide_name": ide[0] if ide else None,
@@ -1051,6 +1054,15 @@ def api_prs_dismiss(repo_encoded: str, pr_number: int):
     repo = _repo_decode(repo_encoded)
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "dismissed")
+    conn.close()
+    return HTMLResponse("")
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/later")
+def api_prs_later(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "later")
     conn.close()
     return HTMLResponse("")
 
