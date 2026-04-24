@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import uuid as uuid_mod
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Query, Request
@@ -39,6 +41,21 @@ from jarvis.patterns import (
 )
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+_JARVIS_HOME = Path.home() / ".jarvis"
+_log_path = _JARVIS_HOME / "jarvis.log"
+_log_path.parent.mkdir(parents=True, exist_ok=True)
+_file_handler = TimedRotatingFileHandler(
+    str(_log_path), when="midnight", backupCount=7, encoding="utf-8"
+)
+_fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+_file_handler.setFormatter(_fmt)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(), _file_handler],
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Jarvis Dashboard")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -1038,6 +1055,7 @@ def api_prs_discover():
     conn2.close()
 
     new_count = len(prs)
+    logger.info("discover found=%d", new_count)
     return HTMLResponse(
         f'<p style="color:#4ade80;font-size:.85em">'
         f"✓ {new_count} open PR{'s' if new_count != 1 else ''} synced — "
@@ -1079,6 +1097,7 @@ def api_prs_watch(repo_encoded: str, pr_number: int):
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "watching")
     conn.close()
+    logger.info("pr.watch repo=%s pr=%s", repo, pr_number)
     return HTMLResponse("")
 
 
@@ -1088,6 +1107,7 @@ def api_prs_dismiss(repo_encoded: str, pr_number: int):
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "dismissed")
     conn.close()
+    logger.info("pr.dismiss repo=%s pr=%s", repo, pr_number)
     return HTMLResponse("")
 
 
@@ -1097,6 +1117,7 @@ def api_prs_later(repo_encoded: str, pr_number: int):
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "later")
     conn.close()
+    logger.info("pr.later repo=%s pr=%s", repo, pr_number)
     return HTMLResponse("")
 
 
@@ -1106,6 +1127,7 @@ def api_prs_priority(repo_encoded: str, pr_number: int, priority: int = Form(0))
     conn = get_db()
     set_pr_priority(conn, repo, pr_number, priority)
     conn.close()
+    logger.info("pr.priority repo=%s pr=%s val=%d", repo, pr_number, priority)
     return HTMLResponse("")
 
 
@@ -1115,6 +1137,7 @@ def api_prs_restore(repo_encoded: str, pr_number: int):
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "pending")
     conn.close()
+    logger.info("pr.restore repo=%s pr=%s", repo, pr_number)
     return HTMLResponse("")
 
 
@@ -1217,6 +1240,9 @@ def api_prs_review(
         json.dumps({"prompt": prompt, "model": chosen_model}),
     )
     conn.close()
+    logger.info(
+        "pr.review repo=%s pr=%s model=%s session=%s", repo, pr_number, chosen_model, new_session_id
+    )
 
     return RedirectResponse(url=f"/chat?session={new_session_id}&autostart=1", status_code=303)
 
@@ -1280,6 +1306,13 @@ def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
         json.dumps({"prompt": prompt, "model": chosen_model}),
     )
     conn.close()
+    logger.info(
+        "pr.rereview repo=%s pr=%s model=%s session=%s",
+        repo,
+        pr_number,
+        chosen_model,
+        existing_session,
+    )
 
     return RedirectResponse(url=f"/chat?session={existing_session}&autostart=1", status_code=303)
 
@@ -1389,7 +1422,13 @@ def api_prs_refresh_all():
             if pr_state in ("merged", "closed"):
                 set_pr_watch_state(conn, repo, sub["pr_number"], "dismissed")
             updated += 1
+    from datetime import UTC, datetime
+
+    from jarvis.db import kv_set
+
+    kv_set(conn, "last_pr_check_at", datetime.now(UTC).isoformat())
     conn.close()
+    logger.info("refresh_all updated=%d", updated)
     return HTMLResponse(
         f'<span style="color:#4ade80;font-size:.85em">✓ {updated} PR{"s" if updated != 1 else ""} refreshed</span>'
     )
@@ -1413,6 +1452,7 @@ def api_open_url(url: str = Form(...), gh_account: str = Form("")):
         )
     else:
         subprocess.Popen(["open", url])
+    logger.info("open_url account=%s url=%.80s", gh_account, url)
     return HTMLResponse("")
 
 
