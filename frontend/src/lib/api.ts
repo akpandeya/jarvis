@@ -9,6 +9,7 @@ import type {
   PendingCountResponse,
   PrsResponse,
   RefreshAllResponse,
+  RefreshRunningResponse,
   ReviewStartResponse,
   SearchResponse,
   SessionsResponse,
@@ -149,6 +150,8 @@ export const api = {
     req<DiscoverResponse>("/api/prs/discover", { method: "POST" }),
   prRefreshAll: () =>
     req<RefreshAllResponse>("/api/prs/refresh-all", { method: "POST" }),
+  prRefreshRunning: () =>
+    req<RefreshRunningResponse>("/api/prs/refresh-running", { method: "POST" }),
   prPendingCount: () =>
     req<PendingCountResponse>("/api/prs/pending-count"),
 
