@@ -341,30 +341,55 @@ def _load_chat_history(session_id: str) -> list[dict]:
 
 
 @app.get("/chat", response_class=HTMLResponse)
-def chat_page(request: Request, session: str | None = Query(None)):
+def chat_page(
+    request: Request,
+    session: str | None = Query(None),
+    autostart: str | None = Query(None),
+):
     history_preview = ""
     history: list[dict] = []
+    autostart_prompt = ""
+    autostart_model = ""
     if session:
         conn = get_db()
         row = conn.execute(
             "SELECT title FROM events WHERE json_extract(metadata,'$.session_id')=? LIMIT 1",
             (session,),
         ).fetchone()
-        conn.close()
         if row:
             history_preview = row["title"]
+        if autostart:
+            from jarvis.db import kv_get
+
+            raw = kv_get(conn, f"review_prompt:{session}")
+            if raw:
+                data = json.loads(raw)
+                autostart_prompt = data.get("prompt", "")
+                autostart_model = data.get("model", "")
+                # consume it — one-shot
+                conn.execute("DELETE FROM kv WHERE key=?", (f"review_prompt:{session}",))
+                conn.commit()
+        conn.close()
         history = _load_chat_history(session)
     return templates.TemplateResponse(
         request,
         "chat.html",
-        {"session_id": session or "", "history_preview": history_preview, "history": history},
+        {
+            "session_id": session or "",
+            "history_preview": history_preview,
+            "history": history,
+            "autostart_prompt": autostart_prompt,
+            "autostart_model": autostart_model,
+        },
     )
 
 
 @app.post("/api/chat/stream")
-def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
+def api_chat_stream(message: str = Form(...), session_id: str = Form(""), model: str = Form("")):
     new_id = session_id or str(uuid_mod.uuid4())
     cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare", "--tools", ""]
+    if model:
+        cmd += ["--model", model]
     if session_id:
         cmd += ["--resume", session_id]
     else:
@@ -1084,83 +1109,62 @@ def api_prs_review(
 
     existing_session = sub.get("chat_session_id")
 
-    if not existing_session:
-        # Fetch full context for first review
-        token = _token_for_repo(conn, repo)
-        env = {**os.environ, "GH_TOKEN": token} if token else None
-        pr_info = (
-            _gh(
-                "pr",
-                "view",
-                str(pr_number),
-                "--json",
-                "title,body,author,reviews,reviewDecision,statusCheckRollup",
-                repo=repo,
-                env=env,
-            )
-            or {}
-        )
-        diff_result = subprocess.run(
-            ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            env=env or os.environ,
-        )
-        diff_text = (
-            diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
-        )
-
-        prompt_parts = [
-            f"Please review this pull request:\n\n**{pr_info.get('title', sub.get('title', ''))}**",
-            f"Repo: {repo} | PR #{pr_number}",
-        ]
-        if pr_info.get("body"):
-            prompt_parts.append(f"\n**Description:**\n{pr_info['body']}")
-        ci = sub.get("ci_status") or "unknown"
-        rd = sub.get("review_decision") or "pending"
-        prompt_parts.append(f"\n**CI:** {ci} | **Reviews:** {rd}")
-        prompt_parts.append(f"\n**Diff:**\n```diff\n{diff_text}\n```")
-        prompt_parts.append(
-            "\nPlease give a thorough code review: correctness, potential bugs, design, test coverage, and any suggestions."
-        )
-        prompt = "\n".join(prompt_parts)
-
-        new_session_id = str(uuid_mod.uuid4())
-        set_pr_chat_session(conn, repo, pr_number, new_session_id)
-        conn.close()
-
-        # Kick off the session synchronously by calling claude with the prompt
-        cmd = [
-            "claude",
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--bare",
-            "--tools",
-            "",
-            "--model",
-            chosen_model,
-            "--session-id",
-            new_session_id,
-        ]
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env or os.environ,
-        )
-        proc.stdin.write(prompt)
-        proc.stdin.close()
-        proc.wait()
-
-        return RedirectResponse(url=f"/chat?session={new_session_id}", status_code=303)
-    else:
+    if existing_session:
+        # Continuing existing review — just open the chat thread
         conn.close()
         return RedirectResponse(url=f"/chat?session={existing_session}", status_code=303)
+
+    # First review — fetch diff, build prompt, store in kv, redirect immediately
+    token = _token_for_repo(conn, repo)
+    env = {**os.environ, "GH_TOKEN": token} if token else None
+    pr_info = (
+        _gh(
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "title,body,author,reviews,reviewDecision,statusCheckRollup",
+            repo=repo,
+            env=env,
+        )
+        or {}
+    )
+    diff_result = subprocess.run(
+        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env or os.environ,
+    )
+    diff_text = diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
+
+    prompt_parts = [
+        f"Please review this pull request:\n\n**{pr_info.get('title', sub.get('title', ''))}**",
+        f"Repo: {repo} | PR #{pr_number}",
+    ]
+    if pr_info.get("body"):
+        prompt_parts.append(f"\n**Description:**\n{pr_info['body']}")
+    ci = sub.get("ci_status") or "unknown"
+    rd = sub.get("review_decision") or "pending"
+    prompt_parts.append(f"\n**CI:** {ci} | **Reviews:** {rd}")
+    prompt_parts.append(f"\n**Diff:**\n```diff\n{diff_text}\n```")
+    prompt_parts.append(
+        "\nPlease give a thorough code review: correctness, potential bugs, design, test coverage, and any suggestions."
+    )
+    prompt = "\n".join(prompt_parts)
+
+    new_session_id = str(uuid_mod.uuid4())
+    set_pr_chat_session(conn, repo, pr_number, new_session_id)
+    from jarvis.db import kv_set
+
+    kv_set(
+        conn,
+        f"review_prompt:{new_session_id}",
+        json.dumps({"prompt": prompt, "model": chosen_model}),
+    )
+    conn.close()
+
+    return RedirectResponse(url=f"/chat?session={new_session_id}&autostart=1", status_code=303)
 
 
 @app.get("/api/prs/pending-count")

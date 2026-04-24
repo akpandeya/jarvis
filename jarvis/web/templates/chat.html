@@ -31,6 +31,8 @@
 
 <form id="chat-form" style="margin:0" onsubmit="return false">
   <input type="hidden" id="session-id" value="{{ session_id }}">
+  <input type="hidden" id="autostart-prompt" value="{{ autostart_prompt | e }}">
+  <input type="hidden" id="autostart-model" value="{{ autostart_model | e }}">
   <div style="display:flex;gap:.5rem;align-items:flex-end">
     <textarea id="message" rows="3"
       style="flex:1;margin:0;resize:vertical;width:0;min-width:0"
@@ -70,14 +72,21 @@ msgArea.addEventListener('keydown', (e) => {
   }
 });
 
-sendBtn.addEventListener('click', sendMessage);
+sendBtn.addEventListener('click', () => sendMessage());
 
-async function sendMessage() {
-  const msg = msgArea.value.trim();
+// Auto-send review prompt if redirected from PRs page
+const autostartPrompt = document.getElementById('autostart-prompt').value;
+const autostartModel = document.getElementById('autostart-model').value;
+if (autostartPrompt) {
+  window.addEventListener('load', () => sendMessage(autostartPrompt, autostartModel));
+}
+
+async function sendMessage(overrideMsg, overrideModel) {
+  const msg = overrideMsg || msgArea.value.trim();
   if (!msg || sendBtn.disabled) return;
 
-  output.innerHTML += `<div style="margin-bottom:.75rem"><span style="color:var(--pico-primary);font-weight:600">You</span><br>${escHtml(msg)}</div>`;
-  msgArea.value = '';
+  output.innerHTML += `<div style="margin-bottom:.75rem"><span style="color:var(--pico-primary);font-weight:600">You</span><br>${escHtml(overrideMsg ? '(PR review request)' : msg)}</div>`;
+  if (!overrideMsg) msgArea.value = '';
   sendBtn.disabled = true;
   scrollBottom();
 
@@ -91,6 +100,7 @@ async function sendMessage() {
   const fd = new FormData();
   fd.append('message', msg);
   fd.append('session_id', sessionInput.value);
+  if (overrideModel) fd.append('model', overrideModel);
 
   try {
     const resp = await fetch('/api/chat/stream', {method: 'POST', body: fd});
