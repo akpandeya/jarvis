@@ -724,13 +724,18 @@ def prs_page(
         watching = [s for s in watching if s.get("author") == author]
 
     last_checked = kv_get(conn, "last_pr_check_at") or "Never"
+    conn.close()
+    available_models = _claude_models()
     try:
         review_model = JarvisConfig.load().pr_monitor.review_model
     except Exception:
-        review_model = "claude-opus-4-7"
-    conn.close()
-
-    available_models = _claude_models()
+        review_model = ""
+    if not review_model or review_model in (
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    ):
+        review_model = available_models[0]["id"] if available_models else "claude-opus-4-7"
 
     ide = _detect_ide()
     return templates.TemplateResponse(
@@ -1070,7 +1075,11 @@ def api_prs_review(
     try:
         cfg_model = JarvisConfig.load().pr_monitor.review_model
     except Exception:
-        cfg_model = "claude-opus-4-7"
+        cfg_model = ""
+    # If config model is generic short name, resolve via settings.json model list
+    available = _claude_models()
+    if not cfg_model or cfg_model in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"):
+        cfg_model = available[0]["id"] if available else "claude-opus-4-7"
     chosen_model = model or cfg_model
 
     existing_session = sub.get("chat_session_id")
@@ -1356,7 +1365,13 @@ def settings_browser_profile_set(account: str, profile: str = Form("")):
 
 @app.get("/api/prs/{repo_encoded}/{pr_number}/detail")
 def api_pr_detail(repo_encoded: str, pr_number: int):
+    import os
+
     repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    token = _token_for_repo(conn, repo)
+    conn.close()
+    env = {**os.environ, "GH_TOKEN": token} if token else None
 
     pr = _gh(
         "pr",
@@ -1369,12 +1384,13 @@ def api_pr_detail(repo_encoded: str, pr_number: int):
             "reviews,comments"
         ),
         repo=repo,
+        env=env,
     )
     if pr is None:
         return HTMLResponse('<p style="color:#f87171">Could not fetch PR details.</p>')
 
     # Review comments (inline threads)
-    threads_data = _gh("api", f"repos/{repo}/pulls/{pr_number}/comments") or []
+    threads_data = _gh("api", f"repos/{repo}/pulls/{pr_number}/comments", env=env) or []
 
     # Group threads by original_position/path
     threads: dict[str, list[dict]] = {}
