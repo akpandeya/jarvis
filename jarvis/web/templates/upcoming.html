@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% set active = "upcoming" %}
+{% block title %}Upcoming{% endblock %}
+{% block content %}
+
+<style>
+  .upcoming-grid {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 1.5rem;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .upcoming-grid { grid-template-columns: 1fr; }
+  }
+  .section-header {
+    font-size: .75em;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--pico-muted-color);
+    margin-bottom: .75rem;
+    padding-bottom: .4rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+  .meeting-card {
+    display: flex;
+    gap: .75rem;
+    align-items: flex-start;
+    padding: .65rem 0;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+  .meeting-card:last-child { border-bottom: none; }
+  .meeting-time {
+    font-size: .8em;
+    color: var(--pico-muted-color);
+    min-width: 3.8rem;
+    padding-top: .1rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .meeting-body { flex: 1; min-width: 0; }
+  .meeting-title {
+    font-size: .92em;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meeting-meta {
+    font-size: .78em;
+    color: var(--pico-muted-color);
+    margin-top: .2rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+  .join-btn {
+    font-size: .72rem;
+    padding: .15rem .5rem;
+    background: none;
+    border: 1px solid #7dd3fc;
+    color: #7dd3fc;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .join-btn:hover { background: rgba(125,211,252,.12); }
+  .blocker-card {
+    padding: .55rem 0;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+  .blocker-card:last-child { border-bottom: none; }
+  .blocker-title {
+    font-size: .88em;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .blocker-meta {
+    font-size: .78em;
+    color: var(--pico-muted-color);
+    margin-top: .2rem;
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+  .empty-state {
+    color: var(--pico-muted-color);
+    font-size: .88em;
+    padding: 1rem 0;
+    text-align: center;
+  }
+</style>
+
+<div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:1.25rem">
+  <h2 style="margin:0">Upcoming</h2>
+  <span style="font-size:.85em;color:var(--pico-muted-color)">
+    {{ today.strftime("%A, %B %-d") }}
+  </span>
+</div>
+
+<div class="upcoming-grid">
+
+  {# ── Left: Today's meetings ── #}
+  <section>
+    <div class="section-header">Today's Meetings</div>
+    {% if meetings %}
+      {% for m in meetings %}
+        {% set acct = m.account or "" %}
+        {% set badge_cls = "account-work" if acct == "work" else ("account-personal" if acct == "personal" else "account-default") %}
+        <div class="meeting-card">
+          <div class="meeting-time">{{ m.time_local }}</div>
+          <div class="meeting-body">
+            <div class="meeting-title" title="{{ m.title }}">{{ m.title }}</div>
+            <div class="meeting-meta">
+              {% if acct %}
+                <span class="account-badge {{ badge_cls }}">{{ acct }}</span>
+              {% endif %}
+              {% if m.attendee_count and m.attendee_count | int > 1 %}
+                <span>{{ m.attendee_count }} attendees</span>
+              {% endif %}
+              {% if m.meet_link %}
+                <form method="post" action="/api/open-url" style="display:inline;margin:0">
+                  <input type="hidden" name="url" value="{{ m.meet_link }}">
+                  <input type="hidden" name="gh_account" value="{{ acct }}">
+                  <button type="submit" class="join-btn">▶ Join</button>
+                </form>
+              {% endif %}
+              {% if m.url %}
+                <a href="{{ m.url }}" target="_blank" style="font-size:.75em;color:var(--pico-muted-color)">calendar ↗</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty-state">No meetings today</div>
+    {% endif %}
+  </section>
+
+  {# ── Right: PR Blockers ── #}
+  <aside>
+    <div class="section-header">PR Blockers</div>
+    {% if blockers %}
+      {% for sub in blockers %}
+        {% set encoded = sub.repo | replace("/", "--") %}
+        <div class="blocker-card">
+          <div class="blocker-title">
+            <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+              #{{ sub.pr_number }} {{ sub.title or "(unknown)" }}
+            </a>
+          </div>
+          <div class="blocker-meta">
+            <span>{{ sub.repo }}</span>
+            <span>{{ sub.ci_badge | safe }}</span>
+            <span>{{ sub.review_badge | safe }}</span>
+            <a href="/prs" style="font-size:.75em;color:var(--pico-muted-color)">details ↗</a>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="empty-state">No blockers 🎉</div>
+    {% endif %}
+  </aside>
+
+</div>
+
+{% endblock %}
