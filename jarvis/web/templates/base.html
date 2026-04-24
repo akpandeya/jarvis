@@ -45,6 +45,7 @@
         .account-work { background:#0e4a6e; color:#7dd3fc; }
         .account-personal { background:#14532d; color:#86efac; }
         .account-default { background:#3d3d3d; color:#d1d5db; }
+        .nav-pending-badge { display:inline-block; background:#f87171; color:#fff; border-radius:10px; font-size:.65em; font-weight:700; padding:.05rem .4rem; vertical-align:middle; margin-left:.25rem; line-height:1.4; }
     </style>
 </head>
 <body>
@@ -58,7 +59,13 @@
             <li><a href="/search" {% if active == "search" %}class="active"{% endif %}>Search</a></li>
             <li><a href="/summary?kind=standup" {% if active == "summary" %}class="active"{% endif %}>Summary</a></li>
             <li><a href="/sessions" {% if active == "sessions" %}class="active"{% endif %}>Sessions</a></li>
-            <li><a href="/prs" {% if active == "prs" %}class="active"{% endif %}>PRs</a></li>
+            <li>
+              <a href="/prs" {% if active == "prs" %}class="active"{% endif %}>PRs<span
+                id="prs-pending-badge"
+                hx-get="/api/prs/pending-count-badge"
+                hx-trigger="load, every 120s"
+                hx-swap="innerHTML"></span></a>
+            </li>
             <li><a href="/chat" {% if active == "chat" %}class="active"{% endif %}>Chat</a></li>
             <li><a href="/insights" {% if active == "insights" %}class="active"{% endif %}>Insights</a></li>
         </ul>

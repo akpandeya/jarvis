@@ -3,11 +3,57 @@
 {% block title %}PRs{% endblock %}
 {% block content %}
 
+<style>
+  .pr-card {
+    margin-bottom: .6rem;
+    padding: .7rem 1rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 6px;
+  }
+  .pr-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: .5rem;
+  }
+  .pr-title-line { font-weight: 600; font-size: .92em; }
+  .pr-meta { font-size: .78em; color: var(--pico-muted-color); margin-top: .2rem; }
+  .pr-actions { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .5rem; align-items: center; }
+  .btn-sm {
+    font-size: .73rem; padding: .2rem .55rem; cursor: pointer;
+    border-radius: 4px; white-space: nowrap;
+  }
+  .btn-sm-muted {
+    background: none;
+    border: 1px solid var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+  }
+  .btn-sm-muted:hover { border-color: var(--pico-color); color: var(--pico-color); }
+  .btn-sm-primary { border: 1px solid #7dd3fc; color: #7dd3fc; background: none; }
+  .btn-sm-primary:hover { background: rgba(125,211,252,.1); }
+  .btn-sm-danger { border: 1px solid #f87171; color: #f87171; background: none; }
+  .section-label {
+    font-size: .72em; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--pico-muted-color);
+    margin: 1.25rem 0 .6rem;
+    padding-bottom: .35rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+  .pending-card {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: .5rem;
+    padding: .5rem 0;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+  }
+  .pending-card:last-child { border-bottom: none; }
+</style>
+
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem">
-  <h2 style="margin:0">PR Workspace</h2>
+  <h2 style="margin:0">PRs</h2>
   <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
     <span style="font-size:.8em;color:var(--pico-muted-color)">Last checked: {{ last_checked }}</span>
-    <button style="font-size:.75rem;padding:.25rem .75rem"
+    <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/discover"
       hx-target="#discover-panel"
       hx-swap="innerHTML"
@@ -15,7 +61,7 @@
       hx-on:htmx:after-request="this.disabled=false;this.textContent='↻ Discover PRs';setTimeout(()=>location.reload(),1500)">
       ↻ Discover PRs
     </button>
-    <button style="font-size:.75rem;padding:.25rem .75rem"
+    <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/refresh-all"
       hx-target="#refresh-status"
       hx-swap="innerHTML"
@@ -27,48 +73,79 @@
   </div>
 </div>
 
-<div id="discover-panel" style="margin-bottom:1rem"></div>
+<div id="discover-panel" style="margin-bottom:.75rem"></div>
 
-<details style="margin-bottom:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.75rem 1rem">
-  <summary style="cursor:pointer;font-weight:600;font-size:.9em">Local Repo Paths</summary>
-  <p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0 .75rem">
-    Select a single repo or a parent folder — Jarvis will scan all git repos inside it.
-  </p>
-  <div id="repo-paths-list"
-       hx-get="/api/settings/repo-paths"
-       hx-trigger="load"
-       style="margin-bottom:.75rem">
-    <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
-  </div>
-  <button style="font-size:.8rem;padding:.35rem .75rem"
-    hx-post="/api/settings/repo-paths/browse"
-    hx-target="#repo-paths-list"
-    hx-swap="innerHTML"
-    hx-on:htmx:before-request="this.disabled=true;this.textContent='Choosing…'"
-    hx-on:htmx:after-request="this.disabled=false;this.textContent='+ Choose Folder'">
-    + Choose Folder
-  </button>
-</details>
-
-<details style="margin-bottom:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.75rem 1rem">
-  <summary style="cursor:pointer;font-weight:600;font-size:.9em">Browser Profiles</summary>
-  <p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0 .75rem">
-    Map each GitHub account to a Firefox profile so PRs open in the right browser session.
-  </p>
-  <div id="browser-profile-list"
-       hx-get="/api/settings/browser-profiles"
-       hx-trigger="load">
-    <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
+<details style="margin-bottom:.75rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.6rem 1rem">
+  <summary style="cursor:pointer;font-weight:600;font-size:.85em">Settings</summary>
+  <div style="margin-top:.75rem;display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+    <div>
+      <p style="font-size:.8em;font-weight:600;margin-bottom:.4rem">Local Repo Paths</p>
+      <div id="repo-paths-list" hx-get="/api/settings/repo-paths" hx-trigger="load" style="margin-bottom:.5rem">
+        <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
+      </div>
+      <button class="btn-sm btn-sm-muted"
+        hx-post="/api/settings/repo-paths/browse"
+        hx-target="#repo-paths-list" hx-swap="innerHTML"
+        hx-on:htmx:before-request="this.disabled=true;this.textContent='Choosing…'"
+        hx-on:htmx:after-request="this.disabled=false;this.textContent='+ Choose Folder'">
+        + Choose Folder
+      </button>
+    </div>
+    <div>
+      <p style="font-size:.8em;font-weight:600;margin-bottom:.4rem">Browser Profiles</p>
+      <div id="browser-profile-list" hx-get="/api/settings/browser-profiles" hx-trigger="load">
+        <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
+      </div>
+    </div>
   </div>
 </details>
 
-{% if subscriptions or filter_repo or filter_author %}
-{# Filter bar — only show when there's something to filter #}
-<form method="get" action="/prs" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;margin-bottom:1rem">
+{# ── Pending inbox ── #}
+{% if pending %}
+<div class="section-label">Pending — {{ pending | length }} new</div>
+<div style="border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.5rem 1rem;margin-bottom:.75rem">
+{% for sub in pending %}
+{% set encoded = sub.repo | replace("/", "--") %}
+<div class="pending-card" id="pending-{{ encoded }}-{{ sub.pr_number }}">
   <div>
-    <label style="font-size:.8em;display:block;margin-bottom:.25rem;color:var(--pico-muted-color)">Repo</label>
-    <select name="repo" style="font-size:.85rem;padding:.25rem .5rem;margin:0"
-            onchange="this.form.submit()">
+    <div class="pr-title-line">
+      <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+        {{ sub.repo }}#{{ sub.pr_number }} — {{ sub.title or "(unknown)" }}
+      </a>
+    </div>
+    <div class="pr-meta">
+      {% if sub.author %}{{ sub.author }}{% endif %}
+      {% if sub.branch %} · <code>{{ sub.branch }}</code>{% endif %}
+    </div>
+  </div>
+  <div style="display:flex;gap:.4rem">
+    <button class="btn-sm btn-sm-primary"
+      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/watch"
+      hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
+      hx-swap="outerHTML"
+      hx-on:htmx:after-request="location.reload()">
+      + Watch
+    </button>
+    <button class="btn-sm btn-sm-muted"
+      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
+      hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
+      hx-swap="outerHTML">
+      Dismiss
+    </button>
+  </div>
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
+{# ── Watching ── #}
+<div class="section-label">Watching{% if watching %} — {{ watching | length }}{% endif %}</div>
+
+{% if watching or filter_repo or filter_author %}
+<form method="get" action="/prs" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;margin-bottom:.75rem">
+  <div>
+    <label style="font-size:.75em;display:block;margin-bottom:.2rem;color:var(--pico-muted-color)">Repo</label>
+    <select name="repo" style="font-size:.82rem;padding:.2rem .45rem;margin:0" onchange="this.form.submit()">
       <option value="">All repos</option>
       {% for r in all_repos %}
         <option value="{{ r }}"{% if filter_repo == r %} selected{% endif %}>{{ r }}</option>
@@ -76,9 +153,8 @@
     </select>
   </div>
   <div>
-    <label style="font-size:.8em;display:block;margin-bottom:.25rem;color:var(--pico-muted-color)">Author</label>
-    <select name="author" style="font-size:.85rem;padding:.25rem .5rem;margin:0"
-            onchange="this.form.submit()">
+    <label style="font-size:.75em;display:block;margin-bottom:.2rem;color:var(--pico-muted-color)">Author</label>
+    <select name="author" style="font-size:.82rem;padding:.2rem .45rem;margin:0" onchange="this.form.submit()">
       <option value="">All authors</option>
       {% for a in all_authors %}
         <option value="{{ a }}"{% if filter_author == a %} selected{% endif %}>{{ a }}</option>
@@ -86,82 +162,81 @@
     </select>
   </div>
   {% if filter_repo or filter_author %}
-  <a href="/prs" style="font-size:.8rem;align-self:flex-end;padding-bottom:.3rem">✕ Clear filters</a>
+  <a href="/prs" style="font-size:.78rem;align-self:flex-end;padding-bottom:.3rem">✕ Clear</a>
   {% endif %}
 </form>
 {% endif %}
 
-{% if not subscriptions %}
-<aside style="border-left:3px solid var(--pico-muted-border-color);padding:.75rem 1rem;color:var(--pico-muted-color)">
-  {% if filter_repo or filter_author %}
-    No PRs match the current filters.
-  {% else %}
-    No subscribed PRs yet. Click <strong>↻ Discover PRs</strong> to find open PRs you're involved in.
-  {% endif %}
-</aside>
+{% if not watching %}
+<p style="color:var(--pico-muted-color);font-size:.88em">
+  No watched PRs{% if filter_repo or filter_author %} matching filters{% endif %}.
+  {% if not pending %}Discover PRs to get started.{% endif %}
+</p>
 {% else %}
 <div id="pr-list">
-{% for sub in subscriptions %}
+{% for sub in watching %}
 {% set encoded = sub.repo | replace("/", "--") %}
-<article style="margin-bottom:.75rem;padding:.75rem 1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.5rem">
+<article class="pr-card" id="watching-{{ encoded }}-{{ sub.pr_number }}">
+  <div class="pr-card-header">
     <div>
-      <strong>
+      <div class="pr-title-line">
         <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
           #{{ sub.pr_number }} {{ sub.title or "(unknown title)" }}
         </a>
-      </strong>
-      <div style="font-size:.8em;color:var(--pico-muted-color);margin-top:.2rem">
+      </div>
+      <div class="pr-meta">
         {{ sub.repo }}
         {% if sub.author %} · {{ sub.author }}{% endif %}
         {% if sub.branch %} · <code>{{ sub.branch }}</code>{% endif %}
       </div>
     </div>
-    <div style="font-size:.85em;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.85em">
       <span id="badges-{{ sub.pr_number }}">
-        {{ sub.ci_badge | safe }}
-        &nbsp;
-        {{ sub.review_badge | safe }}
+        {{ sub.ci_badge | safe }} &nbsp; {{ sub.review_badge | safe }}
       </span>
-      <button style="font-size:.75rem;padding:.1rem .35rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color);cursor:pointer"
-        title="Refresh status"
+      <button class="btn-sm btn-sm-muted" title="Refresh"
         hx-get="/api/prs/{{ encoded }}/{{ sub.pr_number }}/refresh"
-        hx-target="#badges-{{ sub.pr_number }}"
-        hx-swap="innerHTML"
+        hx-target="#badges-{{ sub.pr_number }}" hx-swap="innerHTML"
         hx-on:htmx:before-request="this.textContent='…'"
-        hx-on:htmx:after-request="this.textContent='↻'">
-        ↻
-      </button>
+        hx-on:htmx:after-request="this.textContent='↻'">↻</button>
     </div>
   </div>
 
-  <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap">
-    <button style="font-size:.75rem;padding:.2rem .5rem"
+  <div class="pr-actions">
+    <button class="btn-sm btn-sm-muted"
       hx-get="/api/prs/{{ encoded }}/{{ sub.pr_number }}/detail"
-      hx-target="#detail-{{ sub.pr_number }}"
-      hx-swap="innerHTML"
+      hx-target="#detail-{{ sub.pr_number }}" hx-swap="innerHTML"
       hx-on:htmx:before-request="this.textContent='Loading…'"
       hx-on:htmx:after-request="this.textContent='🔍 Detail'">
       🔍 Detail
     </button>
-    <button role="button" class="outline" style="font-size:.75rem;padding:.2rem .5rem"
+
+    <button class="btn-sm btn-sm-muted"
       hx-post="/api/open-url"
       hx-vals='{"url": "{{ sub.pr_url or "" }}", "gh_account": "{{ sub.gh_account }}"}'
-      hx-swap="none">
-      ↗ GitHub
-    </button>
-    <button style="font-size:.75rem;padding:.2rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
+      hx-swap="none">↗ GitHub</button>
+
+    {# Claude review #}
+    {% if sub.chat_session_id %}
+      <a href="/chat?session={{ sub.chat_session_id }}" class="btn-sm btn-sm-primary" style="text-decoration:none">↩ Continue review</a>
+    {% endif %}
+    <form method="post" action="/api/prs/{{ encoded }}/{{ sub.pr_number }}/review" style="display:inline;margin:0">
+      <select name="model" style="font-size:.72rem;padding:.15rem .35rem;margin:0;border-radius:4px;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)">
+        <option value="">{{ review_model }}</option>
+        <option value="claude-opus-4-7">Opus 4.7</option>
+        <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+      </select>
+      <button type="submit" class="btn-sm btn-sm-primary">
+        {% if sub.chat_session_id %}↻ Re-review{% else %}Ask Claude{% endif %}
+      </button>
+    </form>
+
+    <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
-      hx-target="closest article"
+      hx-target="#watching-{{ encoded }}-{{ sub.pr_number }}"
       hx-swap="outerHTML">
       – Dismiss
-    </button>
-    <button style="font-size:.75rem;padding:.2rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
-      hx-delete="/api/prs/{{ encoded }}/{{ sub.pr_number }}"
-      hx-target="closest article"
-      hx-swap="outerHTML"
-      hx-confirm="Unsubscribe from this PR?">
-      ✕ Unsubscribe
     </button>
   </div>
 
@@ -171,37 +246,43 @@
 </div>
 {% endif %}
 
+{# ── Dismissed ── #}
 {% if dismissed %}
-<details style="margin-top:1.5rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.75rem 1rem">
-  <summary style="cursor:pointer;font-size:.9em;color:var(--pico-muted-color)">
+<details style="margin-top:1.25rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.6rem 1rem">
+  <summary style="cursor:pointer;font-size:.85em;color:var(--pico-muted-color)">
     Dismissed ({{ dismissed | length }})
   </summary>
-  <div style="margin-top:.75rem">
+  <div style="margin-top:.6rem">
   {% for sub in dismissed %}
   {% set encoded = sub.repo | replace("/", "--") %}
-  <div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--pico-muted-border-color);flex-wrap:wrap;gap:.5rem">
-    <div style="font-size:.85em">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--pico-muted-border-color);flex-wrap:wrap;gap:.5rem"
+       id="dismissed-{{ encoded }}-{{ sub.pr_number }}">
+    <div style="font-size:.84em">
       <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
         #{{ sub.pr_number }} {{ sub.title or "(unknown title)" }}
       </a>
-      <span style="color:var(--pico-muted-color);margin-left:.5rem">{{ sub.repo }}</span>
-      {% if sub.author %}<span style="color:var(--pico-muted-color)"> · {{ sub.author }}</span>{% endif %}
+      <span style="color:var(--pico-muted-color);margin-left:.4rem">{{ sub.repo }}</span>
     </div>
     <div style="display:flex;gap:.4rem">
-      <button style="font-size:.75rem;padding:.15rem .5rem"
-        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/undismiss"
-        hx-target="closest div[style*='margin-top']"
+      <button class="btn-sm btn-sm-muted"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/restore"
+        hx-target="#dismissed-{{ encoded }}-{{ sub.pr_number }}"
         hx-swap="outerHTML"
         hx-on:htmx:after-request="location.reload()">
         ↩ Restore
       </button>
-      <button style="font-size:.75rem;padding:.15rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
-        hx-delete="/api/prs/{{ encoded }}/{{ sub.pr_number }}"
-        hx-target="closest div[style*='display:flex']"
+      <button class="btn-sm btn-sm-primary"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/watch"
+        hx-target="#dismissed-{{ encoded }}-{{ sub.pr_number }}"
         hx-swap="outerHTML"
-        hx-confirm="Remove this PR entirely?">
-        ✕
+        hx-on:htmx:after-request="location.reload()">
+        + Watch
       </button>
+      <button class="btn-sm btn-sm-muted"
+        hx-delete="/api/prs/{{ encoded }}/{{ sub.pr_number }}"
+        hx-target="#dismissed-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML"
+        hx-confirm="Remove this PR entirely?">✕</button>
     </div>
   </div>
   {% endfor %}

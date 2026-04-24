@@ -61,6 +61,7 @@ class PrMonitorConfig(BaseModel):
     staging_patterns: list[str] = Field(default_factory=lambda: ["staging", "stg", "stage"])
     max_files: int = 10
     max_lines: int = 500
+    review_model: str = "claude-opus-4-7"
 
 
 class JarvisConfig(BaseModel):
@@ -135,6 +136,8 @@ staging_patterns = ["staging", "stg", "stage"]
 # Oversized PR thresholds.
 max_files = 10
 max_lines = 500
+# Model used for PR review chat (any Claude model ID).
+review_model = "claude-opus-4-7"
 
 """
 
