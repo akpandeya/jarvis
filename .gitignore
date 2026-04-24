@@ -8,3 +8,10 @@ build/
 *.db
 .ruff_cache/
 .pytest_cache/
+
+# Frontend — node_modules is huge and reproducible from package-lock.json.
+# jarvis/web/static/ is the built output; it IS committed so wheels ship without npm.
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+.idea/

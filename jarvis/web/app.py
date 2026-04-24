@@ -1,21 +1,33 @@
+"""FastAPI backend for the Jarvis dashboard.
+
+Serves a React SPA from jarvis/web/static/ and exposes JSON endpoints under /api/*.
+The HTML-fragment endpoints used by the old HTMX frontend have been removed.
+"""
+
 from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import uuid as uuid_mod
+from datetime import UTC, date, datetime
+from datetime import datetime as dt
+from datetime import time as dtime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI, Form, HTTPException, Query
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from jarvis.db import (
     add_repo_path,
     delete_repo_path,
     event_count,
     get_db,
+    kv_get,
+    kv_set,
     list_repo_paths,
     list_sessions,
     query_events,
@@ -40,7 +52,9 @@ from jarvis.patterns import (
     time_of_day_distribution,
 )
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
 _JARVIS_HOME = Path.home() / ".jarvis"
 _log_path = _JARVIS_HOME / "jarvis.log"
@@ -57,460 +71,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# FastAPI app + static SPA
+# ---------------------------------------------------------------------------
+
+STATIC_DIR = Path(__file__).parent / "static"
+
 app = FastAPI(title="Jarvis Dashboard")
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return RedirectResponse(url="/upcoming", status_code=302)
-
-
-@app.get("/timeline", response_class=HTMLResponse)
-def timeline(
-    request: Request,
-    source: str | None = Query(None),
-    project: str | None = Query(None),
-    days: int = Query(14),
-    page: int = Query(1),
-):
-    per_page = 30
-    conn = get_db()
-    events = query_events(conn, source=source, project=project, days=days, limit=per_page * page)
-    page_events = events[(page - 1) * per_page :]
-    total = event_count(conn)
-
-    sources = conn.execute("SELECT DISTINCT source FROM events ORDER BY source").fetchall()
-    projects = conn.execute(
-        "SELECT DISTINCT project FROM events WHERE project IS NOT NULL ORDER BY project"
-    ).fetchall()
-    conn.close()
-
-    ctx = {
-        "events": page_events,
-        "total": total,
-        "source": source,
-        "project": project,
-        "days": days,
-        "page": page,
-        "has_more": len(events) == per_page * page,
-        "sources": [r["source"] for r in sources],
-        "projects": [r["project"] for r in projects],
-    }
-
-    if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(request, "_events.html", ctx)
-    return templates.TemplateResponse(request, "timeline.html", ctx)
-
-
-@app.get("/upcoming", response_class=HTMLResponse)
-def upcoming(request: Request):
-    import zoneinfo as _zi
-    from datetime import UTC, date
-    from datetime import datetime as dt
-    from datetime import time as dtime
-
-    conn = get_db()
-    try:
-        _tz = _zi.ZoneInfo("localtime")
-    except Exception:
-        _tz = UTC
-    _today = date.today()
-    today_start = dt.combine(_today, dtime.min, tzinfo=_tz).astimezone(UTC)
-    today_end = dt.combine(_today, dtime.max, tzinfo=_tz).astimezone(UTC)
-
-    rows = conn.execute(
-        """SELECT title, happened_at, url, body,
-                  json_extract(metadata,'$.location') as location,
-                  json_extract(metadata,'$.meet_link') as meet_link,
-                  json_extract(metadata,'$.attendee_count') as attendee_count,
-                  json_extract(metadata,'$.account') as account,
-                  json_extract(metadata,'$.status') as status
-           FROM events
-           WHERE source='gcal'
-             AND happened_at >= ? AND happened_at <= ?
-           ORDER BY happened_at ASC""",
-        (today_start.isoformat(), today_end.isoformat()),
-    ).fetchall()
-
-    meetings = []
-    for r in rows:
-        m = dict(r)
-        try:
-            ts = dt.fromisoformat(m["happened_at"])
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=UTC)
-            m["time_local"] = ts.astimezone(_tz).strftime("%-I:%M %p")
-            m["happened_at_epoch"] = int(ts.timestamp() * 1000)
-        except Exception:
-            m["time_local"] = (m["happened_at"] or "")[:16].replace("T", " ")
-            m["happened_at_epoch"] = 0
-        meetings.append(m)
-
-    watching_subs = subscriptions_watching(conn)[:5]
-
-    # Attach gh_account (same logic as prs_page)
-    repo_account_map: dict[str, str] = {}
-    owner_account_map: dict[str, str] = {}
-    for r in list_repo_paths(conn):
-        if not r.get("gh_account"):
-            continue
-        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
-        if full_repo:
-            repo_account_map[full_repo] = r["gh_account"]
-            owner = full_repo.split("/")[0]
-            owner_account_map.setdefault(owner, r["gh_account"])
-    for s in watching_subs:
-        owner = s["repo"].split("/")[0]
-        account = repo_account_map.get(s["repo"]) or owner_account_map.get(owner, "")
-        s["gh_account"] = account
-
-    top_prs = [_add_badges(s) for s in watching_subs]
-
-    available_models = _claude_models()
-    try:
-        from jarvis.config import JarvisConfig
-
-        review_model = JarvisConfig.load().pr_monitor.review_model
-    except Exception:
-        review_model = ""
-    if not review_model or review_model in (
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-    ):
-        review_model = available_models[0]["id"] if available_models else "claude-opus-4-7"
-
-    conn.close()
-    return templates.TemplateResponse(
-        request,
-        "upcoming.html",
-        {
-            "meetings": meetings,
-            "top_prs": top_prs,
-            "today": date.today(),
-            "review_model": review_model,
-            "available_models": available_models,
-        },
-    )
-
-
-@app.get("/search", response_class=HTMLResponse)
-def search_page(
-    request: Request,
-    q: str = Query(""),
-    limit: int = Query(30),
-):
-    conn = get_db()
-    events = search_events(conn, q, limit=limit) if q else []
-    conn.close()
-
-    ctx = {
-        "events": events,
-        "query": q,
-    }
-    if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(request, "_events.html", ctx)
-    return templates.TemplateResponse(request, "search.html", ctx)
-
-
-@app.get("/summary", response_class=HTMLResponse)
-def summary_page(
-    request: Request,
-    kind: str = Query("standup"),
-    days: int = Query(1),
-    project: str | None = Query(None),
-):
-    return templates.TemplateResponse(
-        request,
-        "summary.html",
-        {
-            "kind": kind,
-            "days": days,
-            "project": project,
-        },
-    )
-
-
-@app.get("/api/summary")
-def api_summary(
-    kind: str = Query("standup"),
-    days: int = Query(1),
-    project: str | None = Query(None),
-):
-    """Generate a summary via Claude. Called by HTMX."""
-    import re
-
-    from jarvis.brain import SYSTEM_PROMPTS, _call_claude, _format_events, _standup_prompt
-
-    conn = get_db()
-    events = query_events(conn, project=project, days=days, limit=200)
-    conn.close()
-
-    if not events:
-        return HTMLResponse("<p>No events found for this period.</p>")
-
-    if kind == "standup":
-        system = _standup_prompt(days)
-    elif kind in SYSTEM_PROMPTS:
-        system = SYSTEM_PROMPTS[kind]
-    else:
-        system = SYSTEM_PROMPTS["weekly"]
-
-    events_text = _format_events(events)
-    result = _call_claude(system, events_text)
-
-    # Basic markdown to HTML
-    html = result
-    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
-    html = re.sub(r"^- (.+)$", r"<li>\1</li>", html, flags=re.MULTILINE)
-    html = re.sub(r"(<li>.*</li>)", r"<ul>\1</ul>", html, flags=re.DOTALL)
-    html = html.replace("\n\n", "<br><br>")
-    return HTMLResponse(html)
-
-
-@app.get("/insights", response_class=HTMLResponse)
-def insights_page(
-    request: Request,
-    days: int = Query(30),
-):
-    conn = get_db()
-    ctx = {
-        "days": days,
-        "time_of_day": time_of_day_distribution(conn, days),
-        "day_of_week": day_of_week_distribution(conn, days),
-        "sources": source_distribution(conn, days),
-        "projects": project_distribution(conn, days),
-        "collaborators": collaboration_frequency(conn, days),
-        "context_switches": context_switches(conn, min(days, 14)),
-    }
-    conn.close()
-
-    if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(request, "insights.html", ctx)
-    return templates.TemplateResponse(request, "insights.html", ctx)
-
-
-@app.get("/api/suggestions")
-def api_suggestions():
-    """Return pending suggestions as JSON."""
-    from jarvis.suggestions import evaluate_all, get_pending
-
-    conn = get_db()
-    evaluate_all(conn)
-    pending = get_pending(conn)
-    conn.close()
-    return [
-        {"rule_id": s.rule_id, "message": s.message, "action": s.action, "priority": s.priority}
-        for s in pending
-    ]
-
-
-@app.post("/api/ingest")
-def api_ingest(days: int = Query(7)):
-    """Trigger ingest synchronously. Returns logs + summary as HTML."""
-    try:
-        from jarvis.ingest import ingest_all
-
-        logs: list[str] = []
-        total = ingest_all(days=days, log_collector=logs)
-        lines_html = "".join(f"<div>{line}</div>" for line in logs if line.strip())
-        return HTMLResponse(
-            f'<div style="font-family:monospace;font-size:.8rem;'
-            f'color:var(--pico-muted-color);margin-top:.5rem">{lines_html}</div>'
-            f'<strong style="color:var(--pico-primary)">✓ {total} events ingested.</strong>'
-        )
-    except Exception as e:
-        return HTMLResponse(f'<span style="color:var(--pico-color-red)">Ingest failed: {e}</span>')
-
-
-@app.get("/sessions", response_class=HTMLResponse)
-def sessions_page(
-    request: Request,
-    project: str | None = Query(None),
-    limit: int = Query(20),
-):
-    conn = get_db()
-    sessions = list_sessions(conn, project=project, limit=limit)
-    claude_sessions = conn.execute(
-        """SELECT title, happened_at,
-                  json_extract(metadata,'$.session_id') as session_id,
-                  json_extract(metadata,'$.branch') as branch,
-                  json_extract(metadata,'$.cwd') as cwd,
-                  json_extract(metadata,'$.turns') as turns,
-                  COALESCE(json_extract(metadata,'$.last_message_at'), happened_at) as last_active
-           FROM events WHERE source='claude_sessions'
-           ORDER BY last_active DESC LIMIT 50"""
-    ).fetchall()
-    conn.close()
-
-    return templates.TemplateResponse(
-        request,
-        "sessions.html",
-        {
-            "sessions": sessions,
-            "claude_sessions": [dict(r) for r in claude_sessions],
-            "project": project,
-        },
-    )
-
-
-def _load_chat_history(session_id: str) -> list[dict]:
-    """Read past turns from ~/.claude/projects/**/<session_id>.jsonl."""
-    import glob
-
-    pattern = str(Path.home() / ".claude" / "projects" / "**" / f"{session_id}.jsonl")
-    matches = glob.glob(pattern, recursive=True)
-    if not matches:
-        return []
-    turns = []
-    try:
-        for line in Path(matches[0]).read_text().splitlines():
-            try:
-                obj = json.loads(line)
-            except Exception:
-                continue
-            if obj.get("isSidechain"):
-                continue
-            role = obj.get("message", {}).get("role")
-            if role not in ("user", "assistant"):
-                continue
-            content = obj.get("message", {}).get("content", "")
-            if isinstance(content, list):
-                text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
-            else:
-                text = str(content)
-            text = text.strip()
-            if text:
-                turns.append({"role": role, "text": text})
-    except Exception:
-        pass
-    return turns
-
-
-@app.get("/chat", response_class=HTMLResponse)
-def chat_page(
-    request: Request,
-    session: str | None = Query(None),
-    autostart: str | None = Query(None),
-):
-    history_preview = ""
-    history: list[dict] = []
-    autostart_prompt = ""
-    autostart_model = ""
-    if session:
-        conn = get_db()
-        row = conn.execute(
-            "SELECT title FROM events WHERE json_extract(metadata,'$.session_id')=? LIMIT 1",
-            (session,),
-        ).fetchone()
-        if row:
-            history_preview = row["title"]
-        if autostart:
-            from jarvis.db import kv_get
-
-            raw = kv_get(conn, f"review_prompt:{session}")
-            if raw:
-                data = json.loads(raw)
-                autostart_prompt = data.get("prompt", "")
-                autostart_model = data.get("model", "")
-                # consume it — one-shot
-                conn.execute("DELETE FROM kv WHERE key=?", (f"review_prompt:{session}",))
-                conn.commit()
-        conn.close()
-        history = _load_chat_history(session)
-    return templates.TemplateResponse(
-        request,
-        "chat.html",
-        {
-            "session_id": session or "",
-            "history_preview": history_preview,
-            "history": history,
-            "autostart_prompt": autostart_prompt,
-            "autostart_model": autostart_model,
-        },
-    )
-
-
-@app.post("/api/chat/stream")
-def api_chat_stream(message: str = Form(...), session_id: str = Form(""), model: str = Form("")):
-    new_id = session_id or str(uuid_mod.uuid4())
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare", "--tools", ""]
-    if model:
-        cmd += ["--model", model]
-    if session_id:
-        cmd += ["--resume", session_id]
-    else:
-        cmd += ["--session-id", new_id]
-
-    def generate():
-        yield f"data: {json.dumps({'session_id': new_id})}\n\n"
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        proc.stdin.write(message)
-        proc.stdin.close()
-        finished = False
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                t = obj.get("type")
-                # stream-json --verbose: {type:"assistant", message:{content:[{type:"text",text:"..."}]}}
-                if t == "assistant":
-                    for block in obj.get("message", {}).get("content", []):
-                        if block.get("type") == "text" and block.get("text"):
-                            yield f"data: {json.dumps({'text': block['text']})}\n\n"
-                elif t == "result":
-                    finished = True
-                    if obj.get("is_error"):
-                        yield f"data: {json.dumps({'error': obj.get('result', 'Claude returned an error')})}\n\n"
-                    yield 'data: {"done": true}\n\n'
-            except Exception:
-                pass
-        stderr_out = proc.stderr.read().strip()
-        proc.wait()
-        if not finished:
-            msg = stderr_out or f"claude exited with code {proc.returncode}"
-            yield f"data: {json.dumps({'error': msg})}\n\n"
-            yield 'data: {"done": true}\n\n'
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
-    )
+if (STATIC_DIR / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
 
 
 # ---------------------------------------------------------------------------
-# PR Workspace
+# Helpers — gh CLI / Firefox profile / IDE detection
 # ---------------------------------------------------------------------------
-
-_IDE_CANDIDATES = [
-    ("IntelliJ IDEA", "IntelliJ IDEA.app", "idea://open?file={path}"),
-    ("VS Code", "Visual Studio Code.app", "vscode://file/{path}"),
-    ("Cursor", "Cursor.app", "cursor://file/{path}"),
-    ("Zed", "Zed.app", "zed://{path}"),
-]
-
-
-def _detect_ide() -> tuple[str, str] | None:
-    """Return (ide_name, url_template) for the first installed IDE, or None."""
-    apps = Path("/Applications")
-    for name, bundle, url_tpl in _IDE_CANDIDATES:
-        if (apps / bundle).exists():
-            return name, url_tpl
-    return None
 
 
 def _gh(*args: str, repo: str | None = None, env: dict | None = None) -> dict | list | None:
-    """Run a gh command and return parsed JSON, or None on failure."""
     cmd = ["gh", *args]
     if repo:
         cmd += ["--repo", repo]
@@ -531,36 +109,21 @@ def _repo_decode(encoded: str) -> str:
     return encoded.replace("--", "/", 1)
 
 
-def _local_path_for_repo(repo: str) -> Path | None:
-    """Return local checkout path if the repo is in DB repo_paths or git_local.repo_paths."""
-    try:
-        from jarvis.config import JarvisConfig
-
-        config = JarvisConfig.load()
-        conn = get_db()
-        db_paths = [row["path"] for row in list_repo_paths(conn)]
-        conn.close()
-
-        all_paths = db_paths + list(config.git_local.repo_paths or [])
-        repo_name = repo.split("/")[-1]
-        for p in all_paths:
-            lp = Path(p).expanduser()
-            if lp.name == repo_name and (lp / ".git").exists():
-                return lp
-    except Exception:
-        pass
-    return None
-
-
-def _subscriptions_active(conn) -> list[dict]:
-    return subscriptions_watching(conn)
+def _parse_ci_status(pr_data: dict) -> str | None:
+    rollup = pr_data.get("statusCheckRollup") or []
+    if not rollup:
+        return None
+    statuses = {r.get("conclusion") or r.get("status") for r in rollup}
+    if "FAILURE" in statuses or "failure" in statuses:
+        return "failed"
+    if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
+        return "passed"
+    return "running"
 
 
 def _subscription_upsert(
     conn, repo: str, pr_number: int, data: dict, gh_username: str | None = None
 ) -> None:
-    from datetime import UTC, datetime
-
     from ulid import ULID
 
     author_login = (
@@ -594,64 +157,8 @@ def _subscription_delete(conn, repo: str, pr_number: int) -> None:
     conn.commit()
 
 
-def _ci_badge(value: list | str | None) -> str:
-    """Accept a statusCheckRollup list (from gh) or a cached string (from DB)."""
-    if isinstance(value, list):
-        if not value:
-            return '<span style="color:var(--pico-muted-color)">–</span>'
-        statuses = {r.get("conclusion") or r.get("status") for r in value}
-        if "FAILURE" in statuses or "failure" in statuses:
-            return '<span style="color:#f87171">✗ CI Failed</span>'
-        if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
-            return '<span style="color:#4ade80">✓ CI Passed</span>'
-        return '<span style="color:var(--pico-muted-color)">⏳ Running</span>'
-    # Cached string from DB
-    if value == "passed":
-        return '<span style="color:#4ade80">✓ CI Passed</span>'
-    if value == "failed":
-        return '<span style="color:#f87171">✗ CI Failed</span>'
-    if value == "running":
-        return '<span style="color:var(--pico-muted-color)">⏳ Running</span>'
-    return '<span style="color:var(--pico-muted-color)">–</span>'
-
-
-def _review_badge(decision: str | None) -> str:
-    if decision == "APPROVED":
-        return '<span style="color:#4ade80">✓ Approved</span>'
-    if decision == "CHANGES_REQUESTED":
-        return '<span style="color:#f87171">↩ Changes requested</span>'
-    if decision and decision not in ("", "REVIEW_REQUIRED"):
-        return f'<span style="color:var(--pico-muted-color)">{decision}</span>'
-    return '<span style="color:var(--pico-muted-color)">Review pending</span>'
-
-
-def _parse_ci_status(pr_data: dict) -> str | None:
-    """Collapse statusCheckRollup into a simple string for DB storage."""
-    rollup = pr_data.get("statusCheckRollup") or []
-    if not rollup:
-        return None
-    statuses = {r.get("conclusion") or r.get("status") for r in rollup}
-    if "FAILURE" in statuses or "failure" in statuses:
-        return "failed"
-    if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
-        return "passed"
-    return "running"
-
-
-def _token_for_repo(conn, repo: str) -> str | None:
-    """Return a GH_TOKEN for the account associated with this repo in DB paths."""
-    for row in list_repo_paths(conn):
-        path = str(Path(row["path"]).expanduser())
-        if _remote_for_local_repo(path) == repo and row.get("gh_account"):
-            return _gh_token(row["gh_account"])
-    return None
-
-
-def _add_badges(sub: dict) -> dict:
-    """Attach ci_badge and review_badge HTML to a subscription dict (uses cached DB fields)."""
-    sub["ci_badge"] = _ci_badge(sub.get("ci_status"))
-    sub["review_badge"] = _review_badge(sub.get("review_decision"))
-    return sub
+def _subscriptions_active(conn) -> list[dict]:
+    return subscriptions_watching(conn)
 
 
 def _firefox_installed() -> bool:
@@ -659,12 +166,7 @@ def _firefox_installed() -> bool:
 
 
 def _firefox_profiles() -> list[dict]:
-    """Return list of {name, path} dicts from Firefox Profile Groups SQLite.
-
-    Firefox stores user-visible profile names ("Work", "Personal") in a SQLite
-    database under Profile Groups, not in profiles.ini. Falls back to profiles.ini
-    Name= values if the SQLite is unavailable.
-    """
+    import configparser
     import sqlite3
 
     profile_groups_dir = Path.home() / "Library/Application Support/Firefox/Profile Groups"
@@ -680,9 +182,6 @@ def _firefox_profiles() -> list[dict]:
             except Exception:
                 pass
 
-    # Fallback: read profiles.ini
-    import configparser
-
     ini = Path.home() / "Library/Application Support/Firefox/profiles.ini"
     if not ini.exists():
         return []
@@ -695,141 +194,126 @@ def _firefox_profiles() -> list[dict]:
     ]
 
 
-def _profile_for_account(conn, account: str) -> str | None:
-    from jarvis.db import kv_get
-
+def _profile_for_account(conn, account: str | None) -> str | None:
     if not account:
         return None
-    # Direct gh-account → profile mapping (set in PRs settings panel)
     profile = kv_get(conn, f"browser_profile:{account}")
     if profile:
         return profile
-    # Indirect: gcal/calendar account name → gh account → profile
     gh_account = kv_get(conn, f"gcal_gh_account:{account}")
     if gh_account:
         return kv_get(conn, f"browser_profile:{gh_account}")
     return None
 
 
-def _browser_profile_fragment(conn) -> str:
-    from jarvis.db import kv_get
-
-    if not _firefox_installed():
-        return '<p style="font-size:.85em;color:var(--pico-muted-color)">Firefox not found — links open in default browser.</p>'
-    profiles = _firefox_profiles()
-    accounts = _gh_accounts()
-    if not accounts:
-        return (
-            '<p style="font-size:.85em;color:var(--pico-muted-color)">No gh accounts detected.</p>'
-        )
-    rows = ""
-    for acct in accounts:
-        current = kv_get(conn, f"browser_profile:{acct}") or ""
-        opts = '<option value="">— default browser —</option>'
-        for p in profiles:
-            sel = " selected" if p["path"] == current else ""
-            opts += f'<option value="{p["path"]}"{sel}>{p["name"]}</option>'
-        rows += (
-            f'<div style="display:flex;align-items:center;gap:.75rem;padding:.3rem 0;'
-            f'border-bottom:1px solid var(--pico-muted-border-color)">'
-            f'<span style="font-size:.85em;min-width:9rem"><code>{acct}</code></span>'
-            f'<select style="font-size:.8rem;padding:.15rem .4rem;margin:0"'
-            f' name="profile"'
-            f' hx-post="/api/settings/browser-profile/{acct}"'
-            f' hx-target="#browser-profile-list" hx-swap="innerHTML"'
-            f' hx-trigger="change">{opts}</select>'
-            f"</div>"
-        )
-    return rows
-
-
-def _badge_fragment(sub: dict) -> str:
-    """Return just the badge span HTML for HTMX swap into #badges-{pr_number}."""
-    return f"{sub['ci_badge']} &nbsp; {sub['review_badge']}"
-
-
-@app.get("/prs", response_class=HTMLResponse)
-def prs_page(
-    request: Request,
-    repo: str | None = Query(None),
-    author: str | None = Query(None),
-):
-    from jarvis.config import JarvisConfig
-    from jarvis.db import kv_get
-
-    conn = get_db()
-    watching = [_add_badges(s) for s in subscriptions_watching(conn)]
-    pending = subscriptions_pending(conn)
-    later = subscriptions_later(conn)
-    dismissed = subscriptions_dismissed(conn)
-
-    # Attach gh_account to watching subs for open-url
-    repo_account_map: dict[str, str] = {}
-    owner_account_map: dict[str, str] = {}
-    for r in list_repo_paths(conn):
-        if not r.get("gh_account"):
-            continue
-        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
-        if full_repo:
-            repo_account_map[full_repo] = r["gh_account"]
-            owner = full_repo.split("/")[0]
-            owner_account_map.setdefault(owner, r["gh_account"])
-
-    def _attach_account(sub: dict) -> dict:
-        sub_repo = sub["repo"]
-        account = repo_account_map.get(sub_repo)
-        if not account:
-            owner = sub_repo.split("/")[0] if "/" in sub_repo else sub_repo
-            account = owner_account_map.get(owner, "")
-        sub["gh_account"] = account
-        return sub
-
-    watching = [_attach_account(s) for s in watching]
-    pending = [_attach_account(s) for s in pending]
-
-    # Build filter option lists from watching subs
-    all_repos = sorted({s["repo"] for s in watching})
-    all_authors = sorted({s["author"] for s in watching if s.get("author")})
-
-    # Apply filters to watching only
-    if repo:
-        watching = [s for s in watching if s["repo"] == repo]
-    if author:
-        watching = [s for s in watching if s.get("author") == author]
-
-    last_checked = kv_get(conn, "last_pr_check_at") or "Never"
-    conn.close()
-    available_models = _claude_models()
+def _gh_accounts() -> list[str]:
     try:
-        review_model = JarvisConfig.load().pr_monitor.review_model
-    except Exception:
-        review_model = ""
-    if not review_model or review_model in (
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-    ):
-        review_model = available_models[0]["id"] if available_models else "claude-opus-4-7"
+        result = subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, text=True, timeout=10
+        )
+        import re
 
-    ide = _detect_ide()
-    return templates.TemplateResponse(
-        request,
-        "prs.html",
-        {
-            "watching": watching,
-            "pending": pending,
-            "later": later,
-            "dismissed": dismissed,
-            "last_checked": last_checked,
-            "ide_name": ide[0] if ide else None,
-            "all_repos": all_repos,
-            "all_authors": all_authors,
-            "filter_repo": repo or "",
-            "filter_author": author or "",
-            "review_model": review_model,
-            "available_models": available_models,
-        },
-    )
+        return re.findall(r"account (\S+)", result.stderr + result.stdout)
+    except Exception:
+        return []
+
+
+def _gh_token(account: str) -> str | None:
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "token", "--user", account],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _detect_account_for_repo(repo: str) -> str | None:
+    for account in _gh_accounts():
+        token = _gh_token(account)
+        if not token:
+            continue
+        r = subprocess.run(
+            ["gh", "repo", "view", repo, "--json", "name"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            env={**os.environ, "GH_TOKEN": token},
+        )
+        if r.returncode == 0:
+            return account
+    return None
+
+
+def _remote_for_local_repo(path: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        url = result.stdout.strip()
+        import re
+
+        m = re.search(r"github\.com[^:/]*[:/](.+?)(?:\.git)?$", url)
+        return m.group(1) if m else None
+    except Exception:
+        return None
+
+
+def _repos_from_local_paths(config) -> list[str]:
+    repos = []
+    for p in config.git_local.repo_paths or []:
+        path = str(Path(p).expanduser())
+        repo = _remote_for_local_repo(path)
+        if repo and repo not in repos:
+            repos.append(repo)
+    return repos
+
+
+def _repos_from_db(conn) -> list[tuple[str, str | None]]:
+    result = []
+    for row in list_repo_paths(conn):
+        if not row.get("enabled", 1):
+            continue
+        path = str(Path(row["path"]).expanduser())
+        repo = _remote_for_local_repo(path)
+        if repo and not any(r == repo for r, _ in result):
+            result.append((repo, row["gh_account"]))
+    return result
+
+
+def _local_path_for_repo(repo: str) -> Path | None:
+    try:
+        from jarvis.config import JarvisConfig
+
+        config = JarvisConfig.load()
+        conn = get_db()
+        db_paths = [row["path"] for row in list_repo_paths(conn)]
+        conn.close()
+        all_paths = db_paths + list(config.git_local.repo_paths or [])
+        repo_name = repo.split("/")[-1]
+        for p in all_paths:
+            lp = Path(p).expanduser()
+            if lp.name == repo_name and (lp / ".git").exists():
+                return lp
+    except Exception:
+        pass
+    return None
+
+
+def _token_for_repo(conn, repo: str) -> str | None:
+    for row in list_repo_paths(conn):
+        path = str(Path(row["path"]).expanduser())
+        if _remote_for_local_repo(path) == repo and row.get("gh_account"):
+            return _gh_token(row["gh_account"])
+    return None
 
 
 def _claude_models() -> list[dict]:
@@ -859,105 +343,621 @@ def _claude_models() -> list[dict]:
         return _defaults
 
 
-def _gh_accounts() -> list[str]:
-    """Return all gh-authenticated usernames."""
-    try:
-        result = subprocess.run(
-            ["gh", "auth", "status"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        # Parse "✓ Logged in to github.com account USERNAME" lines
-        import re
+def _resolve_review_model(model: str) -> str:
+    """Pick the actual model ID to use for a PR review."""
+    from jarvis.config import JarvisConfig
 
-        return re.findall(r"account (\S+)", result.stderr + result.stdout)
+    try:
+        cfg_model = JarvisConfig.load().pr_monitor.review_model
     except Exception:
+        cfg_model = ""
+    available = _claude_models()
+    if not cfg_model or cfg_model in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"):
+        cfg_model = available[0]["id"] if available else "claude-opus-4-7"
+    return model or cfg_model
+
+
+def _attach_gh_accounts(conn, subs: list[dict]) -> list[dict]:
+    """Mutate subs in-place to add a gh_account field based on repo_paths config."""
+    repo_account_map: dict[str, str] = {}
+    owner_account_map: dict[str, str] = {}
+    for r in list_repo_paths(conn):
+        if not r.get("gh_account"):
+            continue
+        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+        if full_repo:
+            repo_account_map[full_repo] = r["gh_account"]
+            owner = full_repo.split("/")[0]
+            owner_account_map.setdefault(owner, r["gh_account"])
+    for s in subs:
+        owner = s["repo"].split("/")[0] if "/" in s["repo"] else s["repo"]
+        s["gh_account"] = repo_account_map.get(s["repo"]) or owner_account_map.get(owner, "")
+    return subs
+
+
+def _markdown_to_html(markdown: str) -> str:
+    """Cheap markdown → HTML conversion for summary/review rendering."""
+    import re
+
+    html = markdown
+    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
+    html = re.sub(r"^- (.+)$", r"<li>\1</li>", html, flags=re.MULTILINE)
+    html = re.sub(r"(<li>.*</li>)", r"<ul>\1</ul>", html, flags=re.DOTALL)
+    html = html.replace("\n\n", "<br><br>")
+    return html
+
+
+def _load_chat_history(session_id: str) -> list[dict]:
+    import glob
+
+    pattern = str(Path.home() / ".claude" / "projects" / "**" / f"{session_id}.jsonl")
+    matches = glob.glob(pattern, recursive=True)
+    if not matches:
         return []
-
-
-def _gh_token(account: str) -> str | None:
-    """Return the auth token for a specific gh account."""
+    turns = []
     try:
-        r = subprocess.run(
-            ["gh", "auth", "token", "--user", account],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return r.stdout.strip() or None
+        for line in Path(matches[0]).read_text().splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("isSidechain"):
+                continue
+            role = obj.get("message", {}).get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content = obj.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
+            else:
+                text = str(content)
+            text = text.strip()
+            if text:
+                turns.append({"role": role, "text": text})
     except Exception:
-        return None
+        pass
+    return turns
 
 
-def _detect_account_for_repo(repo: str) -> str | None:
-    """Return the first gh account that can access the repo, or None."""
-    import os
-
-    for account in _gh_accounts():
-        token = _gh_token(account)
-        if not token:
-            continue
-        r = subprocess.run(
-            ["gh", "repo", "view", repo, "--json", "name"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            env={**os.environ, "GH_TOKEN": token},
-        )
-        if r.returncode == 0:
-            return account
-    return None
+# ---------------------------------------------------------------------------
+# Event / timeline / search / insights / summary
+# ---------------------------------------------------------------------------
 
 
-def _remote_for_local_repo(path: str) -> str | None:
-    """Extract owner/repo from a local git repo's remote URL."""
+def _event_to_dict(ev) -> dict:
+    out = {
+        "id": ev.id,
+        "source": ev.source,
+        "kind": ev.kind,
+        "title": ev.title,
+        "body": ev.body,
+        "url": ev.url,
+        "project": ev.project,
+        "happened_at": ev.happened_at.isoformat() if ev.happened_at else None,
+        "metadata": ev.metadata,
+    }
+    return out
+
+
+@app.get("/api/timeline")
+def api_timeline(
+    source: str | None = Query(None),
+    project: str | None = Query(None),
+    days: int = Query(14),
+    page: int = Query(1),
+):
+    per_page = 30
+    conn = get_db()
+    events = query_events(conn, source=source, project=project, days=days, limit=per_page * page)
+    page_events = events[(page - 1) * per_page :]
+    total = event_count(conn)
+    sources = [
+        r["source"]
+        for r in conn.execute("SELECT DISTINCT source FROM events ORDER BY source").fetchall()
+    ]
+    projects = [
+        r["project"]
+        for r in conn.execute(
+            "SELECT DISTINCT project FROM events WHERE project IS NOT NULL ORDER BY project"
+        ).fetchall()
+    ]
+    conn.close()
+    return {
+        "events": [_event_to_dict(e) for e in page_events],
+        "total": total,
+        "sources": sources,
+        "projects": projects,
+        "has_more": len(events) == per_page * page,
+        "page": page,
+        "days": days,
+        "source": source,
+        "project": project,
+    }
+
+
+@app.get("/api/search")
+def api_search(q: str = Query(""), limit: int = Query(30)):
+    conn = get_db()
+    events = search_events(conn, q, limit=limit) if q else []
+    conn.close()
+    return {"events": [_event_to_dict(e) for e in events], "query": q}
+
+
+@app.get("/api/insights")
+def api_insights(days: int = Query(30)):
+    conn = get_db()
+    ctx = {
+        "days": days,
+        "time_of_day": time_of_day_distribution(conn, days),
+        "day_of_week": day_of_week_distribution(conn, days),
+        "sources": source_distribution(conn, days),
+        "projects": project_distribution(conn, days),
+        "collaborators": collaboration_frequency(conn, days),
+        "context_switches": context_switches(conn, min(days, 14)),
+    }
+    conn.close()
+    return ctx
+
+
+@app.get("/api/summary")
+def api_summary(
+    kind: str = Query("standup"),
+    days: int = Query(1),
+    project: str | None = Query(None),
+):
+    """Generate a summary via Claude. Returns rendered HTML embedded in JSON."""
+    from jarvis.brain import SYSTEM_PROMPTS, _call_claude, _format_events, _standup_prompt
+
+    conn = get_db()
+    events = query_events(conn, project=project, days=days, limit=200)
+    conn.close()
+
+    if not events:
+        return {"html": "<p>No events found for this period.</p>"}
+
+    if kind == "standup":
+        system = _standup_prompt(days)
+    elif kind in SYSTEM_PROMPTS:
+        system = SYSTEM_PROMPTS[kind]
+    else:
+        system = SYSTEM_PROMPTS["weekly"]
+
+    events_text = _format_events(events)
+    result = _call_claude(system, events_text)
+    return {"html": _markdown_to_html(result)}
+
+
+@app.get("/api/suggestions")
+def api_suggestions():
+    from jarvis.suggestions import evaluate_all, get_pending
+
+    conn = get_db()
+    evaluate_all(conn)
+    pending = get_pending(conn)
+    conn.close()
+    return [
+        {"rule_id": s.rule_id, "message": s.message, "action": s.action, "priority": s.priority}
+        for s in pending
+    ]
+
+
+@app.post("/api/ingest")
+def api_ingest(days: int = Query(7)):
     try:
-        result = subprocess.run(
-            ["git", "-C", path, "remote", "get-url", "origin"],
-            capture_output=True,
+        from jarvis.ingest import ingest_all
+
+        logs: list[str] = []
+        total = ingest_all(days=days, log_collector=logs)
+        logger.info("ingest total=%d", total)
+        return {"ok": True, "total": total, "log": "\n".join(logs)}
+    except Exception as e:
+        logger.exception("ingest failed")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/sessions")
+def api_sessions(
+    project: str | None = Query(None),
+    limit: int = Query(20),
+):
+    conn = get_db()
+    sessions = list_sessions(conn, project=project, limit=limit)
+    claude_sessions = conn.execute(
+        """SELECT title, happened_at,
+                  json_extract(metadata,'$.session_id') as session_id,
+                  json_extract(metadata,'$.branch') as branch,
+                  json_extract(metadata,'$.cwd') as cwd,
+                  json_extract(metadata,'$.turns') as turns,
+                  COALESCE(json_extract(metadata,'$.last_message_at'), happened_at) as last_active
+           FROM events WHERE source='claude_sessions'
+           ORDER BY last_active DESC LIMIT 50"""
+    ).fetchall()
+    conn.close()
+    return {
+        "sessions": [dict(s) for s in sessions],
+        "claude_sessions": [dict(r) for r in claude_sessions],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Chat
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/chat/session/{session_id}")
+def api_chat_session(session_id: str, autostart: int = Query(1)):
+    """Fetch metadata for a chat session: history, autostart prompt, preview title."""
+    history_preview = ""
+    autostart_prompt = ""
+    autostart_model = ""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT title FROM events WHERE json_extract(metadata,'$.session_id')=? LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    if row:
+        history_preview = row["title"]
+    if autostart:
+        raw = kv_get(conn, f"review_prompt:{session_id}")
+        if raw:
+            data = json.loads(raw)
+            autostart_prompt = data.get("prompt", "")
+            autostart_model = data.get("model", "")
+            # one-shot: consume it
+            conn.execute("DELETE FROM kv WHERE key=?", (f"review_prompt:{session_id}",))
+            conn.commit()
+    conn.close()
+    history = _load_chat_history(session_id)
+    return {
+        "session_id": session_id,
+        "history_preview": history_preview,
+        "history": history,
+        "autostart_prompt": autostart_prompt,
+        "autostart_model": autostart_model,
+    }
+
+
+@app.post("/api/chat/stream")
+def api_chat_stream(
+    message: str = Form(...),
+    session_id: str = Form(""),
+    model: str = Form(""),
+):
+    new_id = session_id or str(uuid_mod.uuid4())
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare", "--tools", ""]
+    if model:
+        cmd += ["--model", model]
+    if session_id:
+        cmd += ["--resume", session_id]
+    else:
+        cmd += ["--session-id", new_id]
+
+    def generate():
+        yield f"data: {json.dumps({'session_id': new_id})}\n\n"
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=5,
         )
-        if result.returncode != 0:
-            return None
-        url = result.stdout.strip()
-        # SSH: git@github.com:owner/repo.git  or HTTPS: https://github.com/owner/repo.git
-        import re
+        assert proc.stdin is not None
+        proc.stdin.write(message)
+        proc.stdin.close()
+        finished = False
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                t = obj.get("type")
+                if t == "assistant":
+                    for block in obj.get("message", {}).get("content", []):
+                        if block.get("type") == "text" and block.get("text"):
+                            yield f"data: {json.dumps({'text': block['text']})}\n\n"
+                elif t == "result":
+                    finished = True
+                    if obj.get("is_error"):
+                        yield f"data: {json.dumps({'error': obj.get('result', 'Claude returned an error')})}\n\n"
+                    yield 'data: {"done": true}\n\n'
+            except Exception:
+                pass
+        assert proc.stderr is not None
+        stderr_out = proc.stderr.read().strip()
+        proc.wait()
+        if not finished:
+            msg = stderr_out or f"claude exited with code {proc.returncode}"
+            yield f"data: {json.dumps({'error': msg})}\n\n"
+            yield 'data: {"done": true}\n\n'
 
-        m = re.search(r"github\.com[^:/]*[:/](.+?)(?:\.git)?$", url)
-        return m.group(1) if m else None
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Upcoming (Focus)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/upcoming")
+def api_upcoming():
+    import zoneinfo as _zi
+
+    conn = get_db()
+    try:
+        _tz = _zi.ZoneInfo("localtime")
     except Exception:
-        return None
+        _tz = UTC
+    _today = date.today()
+    today_start = dt.combine(_today, dtime.min, tzinfo=_tz).astimezone(UTC)
+    today_end = dt.combine(_today, dtime.max, tzinfo=_tz).astimezone(UTC)
+
+    rows = conn.execute(
+        """SELECT title, happened_at, url, body,
+                  json_extract(metadata,'$.location') as location,
+                  json_extract(metadata,'$.meet_link') as meet_link,
+                  json_extract(metadata,'$.attendee_count') as attendee_count,
+                  json_extract(metadata,'$.account') as account,
+                  json_extract(metadata,'$.status') as status
+           FROM events
+           WHERE source='gcal'
+             AND happened_at >= ? AND happened_at <= ?
+           ORDER BY happened_at ASC""",
+        (today_start.isoformat(), today_end.isoformat()),
+    ).fetchall()
+
+    meetings: list[dict] = []
+    for r in rows:
+        m = dict(r)
+        try:
+            ts = dt.fromisoformat(m["happened_at"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            m["time_local"] = ts.astimezone(_tz).strftime("%-I:%M %p")
+            m["happened_at_epoch"] = int(ts.timestamp() * 1000)
+        except Exception:
+            m["time_local"] = (m["happened_at"] or "")[:16].replace("T", " ")
+            m["happened_at_epoch"] = 0
+        meetings.append(m)
+
+    top_prs = subscriptions_watching(conn)[:5]
+    _attach_gh_accounts(conn, top_prs)
+    available_models = _claude_models()
+    review_model = _resolve_review_model("")
+    conn.close()
+
+    return {
+        "today": _today.isoformat(),
+        "today_label": _today.strftime("%A, %B %-d"),
+        "meetings": meetings,
+        "top_prs": top_prs,
+        "review_model": review_model,
+        "available_models": available_models,
+    }
 
 
-def _repos_from_local_paths(config) -> list[str]:
-    """Return GitHub owner/repo strings inferred from git_local.repo_paths."""
-    repos = []
-    for p in config.git_local.repo_paths or []:
-        path = str(Path(p).expanduser())
-        repo = _remote_for_local_repo(path)
-        if repo and repo not in repos:
-            repos.append(repo)
-    return repos
+# ---------------------------------------------------------------------------
+# PRs
+# ---------------------------------------------------------------------------
 
 
-def _repos_from_db(conn) -> list[tuple[str, str | None]]:
-    """Return (owner/repo, gh_account) pairs for enabled paths only."""
-    result = []
-    for row in list_repo_paths(conn):
-        if not row.get("enabled", 1):
-            continue
-        path = str(Path(row["path"]).expanduser())
-        repo = _remote_for_local_repo(path)
-        if repo and not any(r == repo for r, _ in result):
-            result.append((repo, row["gh_account"]))
-    return result
+@app.get("/api/prs")
+def api_prs(
+    repo: str | None = Query(None),
+    author: str | None = Query(None),
+):
+    conn = get_db()
+    watching = subscriptions_watching(conn)
+    pending = subscriptions_pending(conn)
+    later = subscriptions_later(conn)
+    dismissed = subscriptions_dismissed(conn)
+
+    _attach_gh_accounts(conn, watching)
+    _attach_gh_accounts(conn, pending)
+    _attach_gh_accounts(conn, later)
+    _attach_gh_accounts(conn, dismissed)
+
+    all_repos = sorted({s["repo"] for s in watching})
+    all_authors = sorted({s["author"] for s in watching if s.get("author")})
+
+    if repo:
+        watching = [s for s in watching if s["repo"] == repo]
+    if author:
+        watching = [s for s in watching if s.get("author") == author]
+
+    last_checked = kv_get(conn, "last_pr_check_at")
+    conn.close()
+
+    return {
+        "pending": pending,
+        "watching": watching,
+        "later": later,
+        "dismissed": dismissed,
+        "all_repos": all_repos,
+        "all_authors": all_authors,
+        "last_checked": last_checked,
+        "review_model": _resolve_review_model(""),
+        "available_models": _claude_models(),
+        "filter_repo": repo or "",
+        "filter_author": author or "",
+    }
+
+
+@app.get("/api/prs/pending-count")
+def api_prs_pending_count():
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM pr_subscriptions WHERE watch_state='pending' AND state='open'"
+    ).fetchone()[0]
+    conn.close()
+    return {"count": count}
+
+
+def _fetch_subscription(conn, repo: str, pr_number: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE repo=? AND pr_number=?", (repo, pr_number)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/watch")
+def api_prs_watch(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "watching")
+    sub = _fetch_subscription(conn, repo, pr_number)
+    conn.close()
+    logger.info("pr.watch repo=%s pr=%s", repo, pr_number)
+    return {"ok": True, "subscription": sub}
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/dismiss")
+def api_prs_dismiss(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "dismissed")
+    sub = _fetch_subscription(conn, repo, pr_number)
+    conn.close()
+    logger.info("pr.dismiss repo=%s pr=%s", repo, pr_number)
+    return {"ok": True, "subscription": sub}
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/later")
+def api_prs_later(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "later")
+    sub = _fetch_subscription(conn, repo, pr_number)
+    conn.close()
+    logger.info("pr.later repo=%s pr=%s", repo, pr_number)
+    return {"ok": True, "subscription": sub}
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/restore")
+def api_prs_restore(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "pending")
+    sub = _fetch_subscription(conn, repo, pr_number)
+    conn.close()
+    logger.info("pr.restore repo=%s pr=%s", repo, pr_number)
+    return {"ok": True, "subscription": sub}
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/priority")
+def api_prs_priority(repo_encoded: str, pr_number: int, priority: int = Form(0)):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_priority(conn, repo, pr_number, priority)
+    sub = _fetch_subscription(conn, repo, pr_number)
+    conn.close()
+    logger.info("pr.priority repo=%s pr=%s val=%d", repo, pr_number, priority)
+    return {"ok": True, "subscription": sub}
+
+
+@app.delete("/api/prs/{repo_encoded}/{pr_number}")
+def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    _subscription_delete(conn, repo, pr_number)
+    conn.close()
+    logger.info("pr.unsubscribe repo=%s pr=%s", repo, pr_number)
+    return {"ok": True}
+
+
+@app.get("/api/prs/{repo_encoded}/{pr_number}/refresh")
+def api_pr_refresh(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    token = _token_for_repo(conn, repo)
+    env = {**os.environ, "GH_TOKEN": token} if token else None
+    data = _gh(
+        "pr",
+        "view",
+        str(pr_number),
+        "--json",
+        "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
+        repo=repo,
+        env=env,
+    )
+    if data:
+        ci = _parse_ci_status(data)
+        rd = data.get("reviewDecision") or ""
+        update_pr_cache(
+            conn,
+            repo,
+            pr_number,
+            ci,
+            rd,
+            title=data.get("title"),
+            author=(data.get("author") or {}).get("login"),
+            branch=data.get("headRefName"),
+            pr_url=data.get("url"),
+            state=(data.get("state") or "").lower() or None,
+        )
+        pr_state = (data.get("state") or "").lower()
+        if pr_state in ("merged", "closed"):
+            set_pr_watch_state(conn, repo, pr_number, "dismissed")
+    sub = _fetch_subscription(conn, repo, pr_number)
+    conn.close()
+    return {"ok": True, "subscription": sub}
+
+
+@app.post("/api/prs/refresh-all")
+def api_prs_refresh_all():
+    conn = get_db()
+    subs = _subscriptions_active(conn)
+    updated = 0
+    for sub in subs:
+        repo = sub["repo"]
+        token = _token_for_repo(conn, repo)
+        env = {**os.environ, "GH_TOKEN": token} if token else None
+        data = _gh(
+            "pr",
+            "view",
+            str(sub["pr_number"]),
+            "--json",
+            "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
+            repo=repo,
+            env=env,
+        )
+        if data:
+            ci = _parse_ci_status(data)
+            rd = data.get("reviewDecision") or ""
+            update_pr_cache(
+                conn,
+                repo,
+                sub["pr_number"],
+                ci,
+                rd,
+                title=data.get("title"),
+                author=(data.get("author") or {}).get("login"),
+                branch=data.get("headRefName"),
+                pr_url=data.get("url"),
+                state=(data.get("state") or "").lower() or None,
+            )
+            pr_state = (data.get("state") or "").lower()
+            if pr_state in ("merged", "closed"):
+                set_pr_watch_state(conn, repo, sub["pr_number"], "dismissed")
+            updated += 1
+    kv_set(conn, "last_pr_check_at", datetime.now(UTC).isoformat())
+    conn.close()
+    logger.info("refresh_all updated=%d", updated)
+    return {"ok": True, "updated": updated}
 
 
 @app.post("/api/prs/discover")
 def api_prs_discover():
-    """Search GitHub for open PRs — scans local repos + all gh accounts. Returns HTML fragment."""
     from jarvis.config import JarvisConfig
 
     config = JarvisConfig.load()
@@ -965,9 +965,6 @@ def api_prs_discover():
     prs: list[dict] = []
     seen: set[str] = set()
 
-    import os
-
-    # Build (repo, gh_account) pairs: explicit config + DB paths + config git_local paths
     repo_accounts: list[tuple[str, str | None]] = [(r, None) for r in config.github.repos or []]
     for repo, acct in _repos_from_db(conn):
         if not any(r == repo for r, _ in repo_accounts):
@@ -977,7 +974,6 @@ def api_prs_discover():
         if not any(repo == r for repo, _ in repo_accounts):
             repo_accounts.append((r, None))
 
-    # List open PRs in every known repo, using the correct gh account token
     for repo, acct in repo_accounts:
         token = _gh_token(acct) if acct else None
         env = {**os.environ, "GH_TOKEN": token} if token else None
@@ -998,7 +994,6 @@ def api_prs_discover():
                     seen.add(key)
                     prs.append({**pr, "repo": repo})
 
-    # Search by involvement across ALL authenticated gh accounts
     for account in _gh_accounts():
         token = _gh_token(account)
         env = {**os.environ, "GH_TOKEN": token} if token else None
@@ -1027,17 +1022,12 @@ def api_prs_discover():
                     seen.add(key)
                     prs.append({**pr, "repo": repo})
 
-    if not prs:
-        return HTMLResponse('<p style="color:var(--pico-muted-color)">No open PRs found.</p>')
-
-    # Upsert all discovered PRs; author's own PRs → watching, others → pending
     gh_accounts_set = set(_gh_accounts())
     conn2 = get_db()
     for pr in prs:
         author_login = (
             pr.get("author", {}).get("login") if isinstance(pr.get("author"), dict) else None
         )
-        # Match against whichever gh account owns this repo
         gh_username = None
         pr_repo = pr["repo"]
         owner = pr_repo.split("/")[0] if "/" in pr_repo else ""
@@ -1054,13 +1044,9 @@ def api_prs_discover():
             set_pr_watch_state(conn2, pr["repo"], pr["number"], "dismissed")
     conn2.close()
 
-    new_count = len(prs)
-    logger.info("discover found=%d", new_count)
-    return HTMLResponse(
-        f'<p style="color:#4ade80;font-size:.85em">'
-        f"✓ {new_count} open PR{'s' if new_count != 1 else ''} synced — "
-        f'<a href="/prs" style="color:#4ade80">refresh page</a> to see them.</p>'
-    )
+    discovered = len(prs)
+    logger.info("discover found=%d", discovered)
+    return {"ok": True, "discovered": discovered, "total": discovered}
 
 
 @app.post("/api/prs/subscribe")
@@ -1079,119 +1065,25 @@ def api_prs_subscribe(repo: str = Form(...), pr_number: int = Form(...)):
     conn = get_db()
     _subscription_upsert(conn, repo, pr_number, pr_data)
     conn.close()
-    return HTMLResponse('<span style="color:#4ade80">✓ Subscribed</span>')
+    return {"ok": True}
 
 
-@app.delete("/api/prs/{repo_encoded}/{pr_number}")
-def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
+@app.post("/api/prs/{repo_encoded}/{pr_number}/review")
+def api_prs_review(repo_encoded: str, pr_number: int, model: str = Form("")):
+    """Start a Claude review chat — returns the session_id and redirect URL."""
     repo = _repo_decode(repo_encoded)
     conn = get_db()
-    _subscription_delete(conn, repo, pr_number)
-    conn.close()
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/watch")
-def api_prs_watch(repo_encoded: str, pr_number: int):
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    set_pr_watch_state(conn, repo, pr_number, "watching")
-    conn.close()
-    logger.info("pr.watch repo=%s pr=%s", repo, pr_number)
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/dismiss")
-def api_prs_dismiss(repo_encoded: str, pr_number: int):
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    set_pr_watch_state(conn, repo, pr_number, "dismissed")
-    conn.close()
-    logger.info("pr.dismiss repo=%s pr=%s", repo, pr_number)
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/later")
-def api_prs_later(repo_encoded: str, pr_number: int):
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    set_pr_watch_state(conn, repo, pr_number, "later")
-    conn.close()
-    logger.info("pr.later repo=%s pr=%s", repo, pr_number)
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/priority")
-def api_prs_priority(repo_encoded: str, pr_number: int, priority: int = Form(0)):
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    set_pr_priority(conn, repo, pr_number, priority)
-    conn.close()
-    logger.info("pr.priority repo=%s pr=%s val=%d", repo, pr_number, priority)
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/restore")
-def api_prs_restore(repo_encoded: str, pr_number: int):
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    set_pr_watch_state(conn, repo, pr_number, "pending")
-    conn.close()
-    logger.info("pr.restore repo=%s pr=%s", repo, pr_number)
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/undismiss")
-def api_prs_undismiss(repo_encoded: str, pr_number: int):
-    """Legacy alias — restores to pending."""
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    set_pr_watch_state(conn, repo, pr_number, "pending")
-    conn.close()
-    return HTMLResponse("")
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/review", response_class=HTMLResponse)
-def api_prs_review(
-    repo_encoded: str,
-    pr_number: int,
-    model: str = Form(""),
-):
-    """Start or resume a Claude review chat for a watched PR. Returns redirect to /chat."""
-    import os
-
-    from fastapi.responses import RedirectResponse
-
-    from jarvis.config import JarvisConfig
-
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM pr_subscriptions WHERE repo=? AND pr_number=?", (repo, pr_number)
-    ).fetchone()
-    if not row:
+    sub = _fetch_subscription(conn, repo, pr_number)
+    if not sub:
         conn.close()
-        return HTMLResponse("PR not found", status_code=404)
-    sub = dict(row)
+        raise HTTPException(status_code=404, detail="PR not found")
 
-    try:
-        cfg_model = JarvisConfig.load().pr_monitor.review_model
-    except Exception:
-        cfg_model = ""
-    # If config model is generic short name, resolve via settings.json model list
-    available = _claude_models()
-    if not cfg_model or cfg_model in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"):
-        cfg_model = available[0]["id"] if available else "claude-opus-4-7"
-    chosen_model = model or cfg_model
-
+    chosen_model = _resolve_review_model(model)
     existing_session = sub.get("chat_session_id")
-
     if existing_session:
-        # Continuing existing review — just open the chat thread
         conn.close()
-        return RedirectResponse(url=f"/chat?session={existing_session}", status_code=303)
+        return {"session_id": existing_session, "redirect": f"/chat?session={existing_session}"}
 
-    # First review — fetch diff, build prompt, store in kv, redirect immediately
     token = _token_for_repo(conn, repo)
     env = {**os.environ, "GH_TOKEN": token} if token else None
     pr_info = (
@@ -1232,8 +1124,6 @@ def api_prs_review(
 
     new_session_id = str(uuid_mod.uuid4())
     set_pr_chat_session(conn, repo, pr_number, new_session_id)
-    from jarvis.db import kv_set
-
     kv_set(
         conn,
         f"review_prompt:{new_session_id}",
@@ -1243,44 +1133,27 @@ def api_prs_review(
     logger.info(
         "pr.review repo=%s pr=%s model=%s session=%s", repo, pr_number, chosen_model, new_session_id
     )
+    return {
+        "session_id": new_session_id,
+        "redirect": f"/chat?session={new_session_id}&autostart=1",
+    }
 
-    return RedirectResponse(url=f"/chat?session={new_session_id}&autostart=1", status_code=303)
 
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/rereview", response_class=HTMLResponse)
+@app.post("/api/prs/{repo_encoded}/{pr_number}/rereview")
 def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
-    """Fetch latest diff and inject it into the existing review session."""
-    import os
-
-    from fastapi.responses import RedirectResponse
-
-    from jarvis.config import JarvisConfig
-
     repo = _repo_decode(repo_encoded)
     conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM pr_subscriptions WHERE repo=? AND pr_number=?", (repo, pr_number)
-    ).fetchone()
-    if not row:
+    sub = _fetch_subscription(conn, repo, pr_number)
+    if not sub:
         conn.close()
-        return HTMLResponse("PR not found", status_code=404)
-    sub = dict(row)
+        raise HTTPException(status_code=404, detail="PR not found")
 
     existing_session = sub.get("chat_session_id")
     if not existing_session:
-        # No session yet — fall through to first review
         conn.close()
-        return RedirectResponse(url=f"/api/prs/{repo_encoded}/{pr_number}/review", status_code=303)
+        return api_prs_review(repo_encoded, pr_number, model)
 
-    try:
-        cfg_model = JarvisConfig.load().pr_monitor.review_model
-    except Exception:
-        cfg_model = ""
-    available = _claude_models()
-    if not cfg_model or cfg_model in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"):
-        cfg_model = available[0]["id"] if available else "claude-opus-4-7"
-    chosen_model = model or cfg_model
-
+    chosen_model = _resolve_review_model(model)
     token = _token_for_repo(conn, repo)
     env = {**os.environ, "GH_TOKEN": token} if token else None
     diff_result = subprocess.run(
@@ -1293,12 +1166,10 @@ def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
     diff_text = diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
 
     prompt = (
-        f"Please re-review this PR with the latest diff. "
-        f"Focus on any new changes since the last review and update your assessment.\n\n"
+        "Please re-review this PR with the latest diff. "
+        "Focus on any new changes since the last review and update your assessment.\n\n"
         f"**Latest diff:**\n```diff\n{diff_text}\n```"
     )
-
-    from jarvis.db import kv_set
 
     kv_set(
         conn,
@@ -1313,227 +1184,15 @@ def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
         chosen_model,
         existing_session,
     )
-
-    return RedirectResponse(url=f"/chat?session={existing_session}&autostart=1", status_code=303)
-
-
-@app.get("/api/prs/pending-count")
-def api_prs_pending_count():
-    conn = get_db()
-    count = conn.execute(
-        "SELECT COUNT(*) FROM pr_subscriptions WHERE watch_state='pending' AND state='open'"
-    ).fetchone()[0]
-    conn.close()
-    return {"count": count}
-
-
-@app.get("/api/prs/pending-count-badge", response_class=HTMLResponse)
-def api_prs_pending_count_badge():
-    conn = get_db()
-    count = conn.execute(
-        "SELECT COUNT(*) FROM pr_subscriptions WHERE watch_state='pending' AND state='open'"
-    ).fetchone()[0]
-    conn.close()
-    if count:
-        return HTMLResponse(f'<span class="nav-pending-badge">{count}</span>')
-    return HTMLResponse("")
-
-
-@app.get("/api/prs/{repo_encoded}/{pr_number}/refresh")
-def api_pr_refresh(repo_encoded: str, pr_number: int):
-    """Fetch live data for one PR, update cache, return badge HTML."""
-    import os
-
-    repo = _repo_decode(repo_encoded)
-    conn = get_db()
-    token = _token_for_repo(conn, repo)
-    env = {**os.environ, "GH_TOKEN": token} if token else None
-    data = _gh(
-        "pr",
-        "view",
-        str(pr_number),
-        "--json",
-        "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
-        repo=repo,
-        env=env,
-    )
-    if data:
-        ci = _parse_ci_status(data)
-        rd = data.get("reviewDecision") or ""
-        update_pr_cache(
-            conn,
-            repo,
-            pr_number,
-            ci,
-            rd,
-            title=data.get("title"),
-            author=(data.get("author") or {}).get("login"),
-            branch=data.get("headRefName"),
-            pr_url=data.get("url"),
-            state=(data.get("state") or "").lower() or None,
-        )
-        pr_state = (data.get("state") or "").lower()
-        if pr_state in ("merged", "closed"):
-            set_pr_watch_state(conn, repo, pr_number, "dismissed")
-        sub = {"ci_badge": _ci_badge(ci), "review_badge": _review_badge(rd)}
-    else:
-        sub = {"ci_badge": '<span style="color:#f87171">error</span>', "review_badge": ""}
-    conn.close()
-    return HTMLResponse(_badge_fragment(sub))
-
-
-@app.post("/api/prs/refresh-all")
-def api_prs_refresh_all():
-    """Fetch live data for all active PRs and update cache. Returns status HTML."""
-    import os
-
-    conn = get_db()
-    subs = _subscriptions_active(conn)
-    updated = 0
-    for sub in subs:
-        repo = sub["repo"]
-        token = _token_for_repo(conn, repo)
-        env = {**os.environ, "GH_TOKEN": token} if token else None
-        data = _gh(
-            "pr",
-            "view",
-            str(sub["pr_number"]),
-            "--json",
-            "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
-            repo=repo,
-            env=env,
-        )
-        if data:
-            ci = _parse_ci_status(data)
-            rd = data.get("reviewDecision") or ""
-            update_pr_cache(
-                conn,
-                repo,
-                sub["pr_number"],
-                ci,
-                rd,
-                title=data.get("title"),
-                author=(data.get("author") or {}).get("login"),
-                branch=data.get("headRefName"),
-                pr_url=data.get("url"),
-                state=(data.get("state") or "").lower() or None,
-            )
-            pr_state = (data.get("state") or "").lower()
-            if pr_state in ("merged", "closed"):
-                set_pr_watch_state(conn, repo, sub["pr_number"], "dismissed")
-            updated += 1
-    from datetime import UTC, datetime
-
-    from jarvis.db import kv_set
-
-    kv_set(conn, "last_pr_check_at", datetime.now(UTC).isoformat())
-    conn.close()
-    logger.info("refresh_all updated=%d", updated)
-    return HTMLResponse(
-        f'<span style="color:#4ade80;font-size:.85em">✓ {updated} PR{"s" if updated != 1 else ""} refreshed</span>'
-    )
-
-
-@app.post("/api/open-url")
-def api_open_url(url: str = Form(...), gh_account: str = Form("")):
-    """Open a URL in the correct Firefox profile (or default browser) for the given account."""
-    import subprocess
-
-    conn = get_db()
-    profile_path = _profile_for_account(conn, gh_account or None)
-    conn.close()
-    if _firefox_installed() and profile_path:
-        # Resolve relative path (e.g. "Profiles/d55fx6mi.default-release") to absolute
-        base = Path.home() / "Library/Application Support/Firefox"
-        abs_profile = base / profile_path
-        firefox_bin = "/Applications/Firefox.app/Contents/MacOS/firefox"
-        subprocess.Popen(
-            [firefox_bin, "--no-remote", "--profile", str(abs_profile), "--new-window", url]
-        )
-    else:
-        subprocess.Popen(["open", url])
-    logger.info("open_url account=%s url=%.80s", gh_account, url)
-    return HTMLResponse("")
-
-
-def _gcal_account_map_fragment(conn) -> str:
-    """HTML fragment: map each gcal account name to a gh account for Firefox profile lookup."""
-    from jarvis.config import JarvisConfig
-    from jarvis.db import kv_get
-
-    gh_accounts = _gh_accounts()
-    if not gh_accounts:
-        return (
-            '<p style="font-size:.85em;color:var(--pico-muted-color)">No gh accounts detected.</p>'
-        )
-    try:
-        gcal_accounts = [a.name for a in JarvisConfig.load().gcal.accounts]
-    except Exception:
-        gcal_accounts = []
-    if not gcal_accounts:
-        return '<p style="font-size:.85em;color:var(--pico-muted-color)">No gcal accounts configured.</p>'
-    rows = ""
-    for cal_acct in gcal_accounts:
-        current = kv_get(conn, f"gcal_gh_account:{cal_acct}") or ""
-        opts = '<option value="">— none —</option>'
-        for gh in gh_accounts:
-            sel = " selected" if gh == current else ""
-            opts += f'<option value="{gh}"{sel}>{gh}</option>'
-        rows += (
-            f'<div style="display:flex;align-items:center;gap:.75rem;padding:.3rem 0;'
-            f'border-bottom:1px solid var(--pico-muted-border-color)">'
-            f'<span style="font-size:.85em;min-width:9rem"><code>{cal_acct}</code></span>'
-            f'<select name="profile" style="font-size:.8rem;padding:.15rem .4rem;margin:0"'
-            f' hx-post="/api/settings/gcal-account/{cal_acct}"'
-            f' hx-target="#gcal-account-map-list" hx-swap="innerHTML"'
-            f' hx-trigger="change">{opts}</select>'
-            f"</div>"
-        )
-    return rows
-
-
-@app.get("/api/settings/gcal-account-map", response_class=HTMLResponse)
-def settings_gcal_account_map_get():
-    conn = get_db()
-    html = _gcal_account_map_fragment(conn)
-    conn.close()
-    return HTMLResponse(html)
-
-
-@app.post("/api/settings/gcal-account/{cal_account}", response_class=HTMLResponse)
-def settings_gcal_account_set(cal_account: str, profile: str = Form("")):
-    from jarvis.db import kv_set
-
-    conn = get_db()
-    kv_set(conn, f"gcal_gh_account:{cal_account}", profile)
-    html = _gcal_account_map_fragment(conn)
-    conn.close()
-    return HTMLResponse(html)
-
-
-@app.get("/api/settings/browser-profiles", response_class=HTMLResponse)
-def settings_browser_profiles_get():
-    conn = get_db()
-    html = _browser_profile_fragment(conn)
-    conn.close()
-    return HTMLResponse(html)
-
-
-@app.post("/api/settings/browser-profile/{account}", response_class=HTMLResponse)
-def settings_browser_profile_set(account: str, profile: str = Form("")):
-    from jarvis.db import kv_set
-
-    conn = get_db()
-    kv_set(conn, f"browser_profile:{account}", profile)
-    html = _browser_profile_fragment(conn)
-    conn.close()
-    return HTMLResponse(html)
+    return {
+        "session_id": existing_session,
+        "redirect": f"/chat?session={existing_session}&autostart=1",
+    }
 
 
 @app.get("/api/prs/{repo_encoded}/{pr_number}/detail")
 def api_pr_detail(repo_encoded: str, pr_number: int):
-    import os
-
+    """Return PR detail as structured JSON."""
     repo = _repo_decode(repo_encoded)
     conn = get_db()
     token = _token_for_repo(conn, repo)
@@ -1547,188 +1206,56 @@ def api_pr_detail(repo_encoded: str, pr_number: int):
         "--json",
         (
             "title,body,number,headRefName,url,author,"
-            "reviewDecision,statusCheckRollup,changedFiles,additions,deletions,"
-            "reviews,comments"
+            "reviewDecision,statusCheckRollup,changedFiles,additions,deletions,reviews,comments"
         ),
         repo=repo,
         env=env,
     )
     if pr is None:
-        return HTMLResponse('<p style="color:#f87171">Could not fetch PR details.</p>')
+        raise HTTPException(status_code=404, detail="Could not fetch PR details")
 
-    # Review comments (inline threads)
     threads_data = _gh("api", f"repos/{repo}/pulls/{pr_number}/comments", env=env) or []
-
-    # Group threads by original_position/path
     threads: dict[str, list[dict]] = {}
     for c in threads_data if isinstance(threads_data, list) else []:
         key = c.get("path", "") + ":" + str(c.get("original_position", ""))
         threads.setdefault(key, []).append(c)
 
-    # Local path + IDE
-    local_path = _local_path_for_repo(repo)
-    ide = _detect_ide()
-    ide_url = None
-    if local_path and ide:
-        ide_url = ide[1].format(path=str(local_path))
+    thread_list = [
+        {
+            "path": comments[0].get("path", ""),
+            "comments": [
+                {
+                    "id": c.get("id"),
+                    "author": c.get("user", {}).get("login", ""),
+                    "body": c.get("body", ""),
+                }
+                for c in comments
+            ],
+        }
+        for comments in threads.values()
+    ]
 
-    # Build HTML
-    encoded = _repo_encode(repo)
-    body_html = (pr.get("body") or "").replace("\n", "<br>")
-    ci_html = _ci_badge(pr.get("statusCheckRollup"))
-    review_html = _review_badge(pr.get("reviewDecision"))
-    branch = pr.get("headRefName", "")
-    changed = pr.get("changedFiles", 0)
-    adds = pr.get("additions", 0)
-    dels = pr.get("deletions", 0)
-
-    checks_rows = ""
-    for chk in pr.get("statusCheckRollup") or []:
-        name = chk.get("name") or chk.get("context", "")
-        status = chk.get("conclusion") or chk.get("status", "")
-        link = chk.get("detailsUrl") or chk.get("targetUrl") or "#"
-        ok = status in ("SUCCESS", "success")
-        fail = status in ("FAILURE", "failure")
-        icon = "✓" if ok else ("✗" if fail else "⏳")
-        checks_rows += (
-            f"<tr><td>{icon} {name}</td>"
-            f'<td><a href="{link}" target="_blank" style="font-size:.8em">details</a></td></tr>'
-        )
-
-    threads_html = ""
-    for key, comments in threads.items():
-        path = comments[0].get("path", "")
-        threads_html += f'<details><summary style="font-size:.85em;cursor:pointer">{path}</summary>'
-        for c in comments:
-            author = c.get("user", {}).get("login", "")
-            body = c.get("body", "").replace("\n", "<br>")
-            comment_id = c.get("id", "")
-            threads_html += (
-                f'<div style="border-left:3px solid var(--pico-muted-border-color);'
-                f'padding:.5rem;margin:.5rem 0">'
-                f'<strong style="font-size:.85em">{author}</strong><br>{body}'
-                f"</div>"
-            )
-            threads_html += (
-                f'<form hx-post="/api/prs/{encoded}/{pr_number}/reply/{comment_id}" '
-                f'hx-target="this" hx-swap="outerHTML" style="margin:.25rem 0">'
-                f'<input name="body" placeholder="Reply…" style="font-size:.8rem;margin-bottom:.25rem">'
-                f'<button type="submit" style="font-size:.75rem;padding:.2rem .6rem">Reply</button>'
-                f"</form>"
-            )
-        threads_html += "</details>"
-
-    ide_btn = ""
-    if ide_url and ide:
-        ide_btn = (
-            f'<a href="{ide_url}" style="font-size:.8rem;margin-left:.5rem" '
-            f'role="button" class="outline">Open in {ide[0]}</a>'
-        )
-    elif not local_path:
-        ide_btn = f'<code style="font-size:.75rem">gh repo clone {repo}</code>'
-
-    html = f"""
-<div style="padding:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;margin-top:.5rem">
-  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
-    <div>
-      <strong>#{pr_number} {pr.get("title", "")}</strong>
-      <span style="font-size:.8em;color:var(--pico-muted-color);margin-left:.5rem">
-        branch: <code>{branch}</code>
-      </span>
-    </div>
-    <div>
-      <a href="{pr.get("url", "#")}" target="_blank" style="font-size:.8rem" role="button" class="outline">
-        View on GitHub ↗
-      </a>
-      {ide_btn}
-    </div>
-  </div>
-  <div style="margin:.5rem 0;font-size:.9em">{ci_html} &nbsp; {review_html}</div>
-  <div style="font-size:.8em;color:var(--pico-muted-color)">{changed} files &nbsp; +{adds} −{dels}</div>
-  {f'<p style="font-size:.9em;margin-top:.75rem">{body_html}</p>' if body_html else ""}
-  {f'<table style="font-size:.8em;margin:.5rem 0"><tbody>{checks_rows}</tbody></table>' if checks_rows else ""}
-  {f'<h4 style="font-size:.9em;margin-top:1rem">Review threads</h4>{threads_html}' if threads_html else ""}
-  <div style="margin-top:1rem">
-    <button style="font-size:.75rem;padding:.2rem .6rem"
-      hx-post="/api/prs/{encoded}/{pr_number}/review"
-      hx-target="#pr-review-{pr_number}"
-      hx-swap="innerHTML"
-      hx-on:htmx:before-request="this.disabled=true;this.textContent='🤖 Reviewing…'"
-      hx-on:htmx:after-request="this.disabled=false;this.textContent='🤖 Review with Claude'">
-      🤖 Review with Claude
-    </button>
-    <div id="pr-review-{pr_number}" style="margin-top:.5rem;font-size:.85em"></div>
-  </div>
-</div>
-"""
-    return HTMLResponse(html)
-
-
-@app.post("/api/prs/{repo_encoded}/{pr_number}/review")
-def api_pr_review(repo_encoded: str, pr_number: int):
-    """Claude reviews the PR diff and posts it as a GitHub review comment."""
-    import re
-
-    repo = _repo_decode(repo_encoded)
-
-    # Get diff
-    diff_result = subprocess.run(
-        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    diff = diff_result.stdout[:6000] if diff_result.returncode == 0 else ""
-
-    if not diff:
-        return HTMLResponse('<span style="color:#f87171">Could not fetch PR diff.</span>')
-
-    prompt = (
-        "Review this pull request diff. Be concise — 3-5 bullet points covering: "
-        "correctness issues, potential bugs, style/clarity suggestions. "
-        "If it looks good, say so briefly.\n\n"
-        f"```diff\n{diff}\n```"
-    )
-
-    try:
-        result = subprocess.run(
-            ["claude", "-p", "--bare", prompt],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        review_text = result.stdout.strip() or "No review generated."
-    except Exception as e:
-        return HTMLResponse(f'<span style="color:#f87171">Claude error: {e}</span>')
-
-    # Post as GitHub PR comment
-    subprocess.run(
-        [
-            "gh",
-            "pr",
-            "comment",
-            str(pr_number),
-            "--repo",
-            repo,
-            "--body",
-            f"🤖 **Jarvis Claude Review**\n\n{review_text}",
+    return {
+        "title": pr.get("title", ""),
+        "body": pr.get("body") or "",
+        "number": pr.get("number"),
+        "branch": pr.get("headRefName", ""),
+        "url": pr.get("url"),
+        "changed_files": pr.get("changedFiles", 0),
+        "additions": pr.get("additions", 0),
+        "deletions": pr.get("deletions", 0),
+        "ci_status": _parse_ci_status(pr),
+        "review_decision": pr.get("reviewDecision"),
+        "checks": [
+            {
+                "name": chk.get("name") or chk.get("context", ""),
+                "status": chk.get("conclusion") or chk.get("status", ""),
+                "url": chk.get("detailsUrl") or chk.get("targetUrl"),
+            }
+            for chk in pr.get("statusCheckRollup") or []
         ],
-        capture_output=True,
-        timeout=15,
-    )
-
-    # Render as HTML
-    html = review_text
-    html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", html)
-    html = re.sub(r"^[-•] (.+)$", r"<li>\1</li>", html, flags=re.MULTILINE)
-    html = re.sub(r"(<li>.*</li>)", r"<ul>\1</ul>", html, flags=re.DOTALL)
-    html = html.replace("\n\n", "<br>")
-    return HTMLResponse(
-        f'<div style="border-left:3px solid var(--pico-primary);padding:.5rem .75rem">'
-        f"{html}"
-        f'<div style="font-size:.75em;color:var(--pico-muted-color);margin-top:.25rem">'
-        f"↑ Posted as comment on GitHub</div></div>"
-    )
+        "threads": thread_list,
+    }
 
 
 @app.post("/api/prs/{repo_encoded}/{pr_number}/reply/{comment_id}")
@@ -1739,77 +1266,45 @@ def api_pr_reply(repo_encoded: str, pr_number: int, comment_id: int, body: str =
         capture_output=True,
         timeout=15,
     )
-    return HTMLResponse(
-        f'<div style="font-size:.8em;color:var(--pico-muted-color)">↑ Replied: {body}</div>'
-    )
+    return {"ok": True, "body": body}
 
 
 # ---------------------------------------------------------------------------
-# Repo path settings
+# Open URL + settings
 # ---------------------------------------------------------------------------
 
 
-def _repo_paths_fragment(conn) -> str:
-    rows = list_repo_paths(conn)
-    if not rows:
-        return '<p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0">No paths added yet.</p>'
-    accounts = _gh_accounts()
-    items = ""
-    for row in rows:
-        path = row["path"]
-        repo = _remote_for_local_repo(str(Path(path).expanduser()))
-        current_acct = row["gh_account"] or ""
-        if repo:
-            repo_label = f'<span style="color:var(--pico-muted-color)">→ {repo}</span>'
-            opts = "".join(
-                f'<option value="{a}"{" selected" if a == current_acct else ""}>{a}</option>'
-                for a in accounts
-            )
-            acct_select = (
-                f'<select style="font-size:.75rem;padding:.1rem .3rem;margin:0 .4rem;'
-                f"border:1px solid var(--pico-muted-border-color);background:transparent;"
-                f'color:var(--pico-muted-color);border-radius:4px"'
-                f' name="gh_account"'
-                f' hx-post="/api/settings/repo-paths/{row["id"]}/account"'
-                f' hx-target="#repo-paths-list" hx-swap="innerHTML"'
-                f' hx-trigger="change">{opts}</select>'
-                if accounts
-                else f'<span style="font-size:.75rem;color:var(--pico-muted-color);margin:0 .4rem">'
-                f"[{current_acct or 'no account'}]</span>"
-            )
-        else:
-            repo_label = '<span style="color:var(--pico-muted-color)">(not a GitHub repo)</span>'
-            acct_select = ""
-        enabled = row.get("enabled", 1)
-        checked = "checked" if enabled else ""
-        muted = "" if enabled else "opacity:.45;"
-        items += (
-            f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:.3rem 0;border-bottom:1px solid var(--pico-muted-border-color);{muted}">'
-            f'<span style="font-size:.85em;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
-            f'<input type="checkbox" {checked} style="margin:0;width:1rem;height:1rem;cursor:pointer"'
-            f' hx-post="/api/settings/repo-paths/{row["id"]}/toggle"'
-            f' hx-target="#repo-paths-list" hx-swap="innerHTML" hx-trigger="change">'
-            f"<code>{path}</code> {repo_label}{acct_select}</span>"
-            f'<button style="font-size:.75rem;padding:.15rem .5rem;background:none;'
-            f'border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"'
-            f' hx-delete="/api/settings/repo-paths/{row["id"]}"'
-            f' hx-target="#repo-paths-list" hx-swap="innerHTML">✕</button>'
-            f"</div>"
-        )
-    return items
-
-
-@app.get("/api/settings/repo-paths", response_class=HTMLResponse)
-def settings_repo_paths_get():
+@app.post("/api/open-url")
+def api_open_url(url: str = Form(...), gh_account: str = Form("")):
     conn = get_db()
-    html = _repo_paths_fragment(conn)
+    profile_path = _profile_for_account(conn, gh_account or None)
     conn.close()
-    return HTMLResponse(html)
+    if _firefox_installed() and profile_path:
+        base = Path.home() / "Library/Application Support/Firefox"
+        abs_profile = base / profile_path
+        firefox_bin = "/Applications/Firefox.app/Contents/MacOS/firefox"
+        subprocess.Popen(
+            [firefox_bin, "--no-remote", "--profile", str(abs_profile), "--new-window", url]
+        )
+    else:
+        subprocess.Popen(["open", url])
+    logger.info("open_url account=%s url=%.80s", gh_account, url)
+    return {"ok": True}
 
 
-@app.post("/api/settings/repo-paths", response_class=HTMLResponse)
-def settings_repo_paths_add(path: str = Form(...)):
+@app.get("/api/settings/repo-paths")
+def api_settings_repo_paths_get():
+    conn = get_db()
+    rows = list_repo_paths(conn)
+    for r in rows:
+        r["remote_repo"] = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+    accounts = _gh_accounts()
+    conn.close()
+    return {"paths": rows, "available_accounts": accounts}
+
+
+@app.post("/api/settings/repo-paths")
+def api_settings_repo_paths_add(path: str = Form(...)):
     p = path.strip()
     conn = get_db()
     row_id = add_repo_path(conn, p)
@@ -1818,14 +1313,12 @@ def settings_repo_paths_add(path: str = Form(...)):
         account = _detect_account_for_repo(repo)
         if account:
             set_repo_path_account(conn, row_id, account)
-    html = _repo_paths_fragment(conn)
     conn.close()
-    return HTMLResponse(html)
+    return api_settings_repo_paths_get()
 
 
-@app.post("/api/settings/repo-paths/browse", response_class=HTMLResponse)
-def settings_repo_paths_browse():
-    """Open a native macOS folder picker and add the chosen path."""
+@app.post("/api/settings/repo-paths/browse")
+def api_settings_repo_paths_browse():
     try:
         result = subprocess.run(
             [
@@ -1838,15 +1331,11 @@ def settings_repo_paths_browse():
             timeout=60,
         )
         if result.returncode != 0 or not result.stdout.strip():
-            return HTMLResponse("")  # user cancelled — return empty, list unchanged
+            return api_settings_repo_paths_get()
         chosen = result.stdout.strip().rstrip("/")
     except Exception as e:
-        return HTMLResponse(
-            f'<p style="color:#f87171;font-size:.85em">Folder picker error: {e}</p>'
-        )
+        raise HTTPException(status_code=500, detail=f"Folder picker error: {e}") from e
 
-    # If the chosen folder itself is a git repo, add it directly.
-    # Otherwise scan one level deep for git repos (handles "~/code" parent folders).
     chosen_path = Path(chosen)
     candidates: list[str] = []
     if (chosen_path / ".git").exists():
@@ -1857,9 +1346,7 @@ def settings_repo_paths_browse():
                 candidates.append(str(sub))
 
     if not candidates:
-        return HTMLResponse(
-            '<p style="color:#f87171;font-size:.85em">No git repos found in that folder.</p>'
-        )
+        raise HTTPException(status_code=400, detail="No git repos found in that folder")
 
     conn = get_db()
     for p in candidates:
@@ -1869,35 +1356,101 @@ def settings_repo_paths_browse():
             account = _detect_account_for_repo(repo)
             if account:
                 set_repo_path_account(conn, row_id, account)
-    html = _repo_paths_fragment(conn)
     conn.close()
-    return HTMLResponse(html)
+    return api_settings_repo_paths_get()
 
 
-@app.delete("/api/settings/repo-paths/{path_id}", response_class=HTMLResponse)
-def settings_repo_paths_delete(path_id: str):
+@app.delete("/api/settings/repo-paths/{path_id}")
+def api_settings_repo_paths_delete(path_id: str):
     conn = get_db()
     delete_repo_path(conn, path_id)
-    html = _repo_paths_fragment(conn)
     conn.close()
-    return HTMLResponse(html)
+    return api_settings_repo_paths_get()
 
 
-@app.post("/api/settings/repo-paths/{path_id}/account", response_class=HTMLResponse)
-def settings_repo_paths_set_account(path_id: str, gh_account: str = Form(...)):
+@app.post("/api/settings/repo-paths/{path_id}/account")
+def api_settings_repo_paths_set_account(path_id: str, gh_account: str = Form(...)):
     conn = get_db()
     set_repo_path_account(conn, path_id, gh_account or None)
-    html = _repo_paths_fragment(conn)
     conn.close()
-    return HTMLResponse(html)
+    return api_settings_repo_paths_get()
 
 
-@app.post("/api/settings/repo-paths/{path_id}/toggle", response_class=HTMLResponse)
-def settings_repo_paths_toggle(path_id: str):
+@app.post("/api/settings/repo-paths/{path_id}/toggle")
+def api_settings_repo_paths_toggle(path_id: str):
     conn = get_db()
     row = conn.execute("SELECT enabled FROM repo_paths WHERE id=?", (path_id,)).fetchone()
     if row:
         set_repo_path_enabled(conn, path_id, not row["enabled"])
-    html = _repo_paths_fragment(conn)
     conn.close()
-    return HTMLResponse(html)
+    return api_settings_repo_paths_get()
+
+
+@app.get("/api/settings/browser-profiles")
+def api_settings_browser_profiles():
+    if not _firefox_installed():
+        return {"installed": False, "profiles": [], "accounts": {}}
+    profiles = _firefox_profiles()
+    accounts = _gh_accounts()
+    conn = get_db()
+    account_map = {acct: kv_get(conn, f"browser_profile:{acct}") or "" for acct in accounts}
+    conn.close()
+    return {"installed": True, "profiles": profiles, "accounts": account_map}
+
+
+@app.post("/api/settings/browser-profile/{account}")
+def api_settings_browser_profile_set(account: str, profile: str = Form("")):
+    conn = get_db()
+    kv_set(conn, f"browser_profile:{account}", profile)
+    conn.close()
+    return api_settings_browser_profiles()
+
+
+@app.get("/api/settings/gcal-account-map")
+def api_settings_gcal_account_map():
+    from jarvis.config import JarvisConfig
+
+    gh_accounts = _gh_accounts()
+    try:
+        gcal_accounts = [a.name for a in JarvisConfig.load().gcal.accounts]
+    except Exception:
+        gcal_accounts = []
+    conn = get_db()
+    mapping = {cal: kv_get(conn, f"gcal_gh_account:{cal}") or "" for cal in gcal_accounts}
+    conn.close()
+    return {"gh_accounts": gh_accounts, "gcal_accounts": gcal_accounts, "mapping": mapping}
+
+
+@app.post("/api/settings/gcal-account/{cal_account}")
+def api_settings_gcal_account_set(cal_account: str, profile: str = Form("")):
+    conn = get_db()
+    kv_set(conn, f"gcal_gh_account:{cal_account}", profile)
+    conn.close()
+    return api_settings_gcal_account_map()
+
+
+# ---------------------------------------------------------------------------
+# SPA shell — serve index.html for any non-/api route that doesn't match
+# ---------------------------------------------------------------------------
+
+
+@app.get("/", response_class=HTMLResponse)
+def spa_root():
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return HTMLResponse(
+        "<h1>Frontend not built</h1><p>Run <code>cd frontend && npm run build</code>.</p>"
+    )
+
+
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+def spa_catch_all(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404)
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return HTMLResponse(
+        "<h1>Frontend not built</h1><p>Run <code>cd frontend && npm run build</code>.</p>"
+    )

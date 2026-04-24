@@ -4,16 +4,16 @@ Personal engineering assistant — tracks work, summarises activity, monitors PR
 
 ## Install (from repo)
 
-Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/) and [Node.js 20+](https://nodejs.org/) (for building the React dashboard).
 
 ```bash
 git clone git@github.com:akpandeya/jarvis.git
 cd jarvis
-make install      # installs `jarvis` and `jarvis-menubar` to ~/.local/bin
+make install      # builds frontend, installs `jarvis` and `jarvis-menubar` to ~/.local/bin
 jarvis install    # interactive setup: GitHub token, repos, autostart agents
 ```
 
-`make install` uses `uv tool install` — no venv activation needed afterwards. `jarvis` is available in any new terminal immediately.
+`make install` builds the React frontend into `jarvis/web/static/` and then uses `uv tool install` — no venv activation needed afterwards. `jarvis` is available in any new terminal immediately.
 
 ## First-run setup
 
@@ -37,9 +37,21 @@ jarvis menubar         # start menu bar tray icon
 
 ## Development
 
+Backend:
+
 ```bash
 make dev     # create .venv and install dev dependencies
 make test    # run pytest
 make lint    # ruff check
 make format  # ruff format
 ```
+
+Frontend (React + Vite, lives in `frontend/`):
+
+```bash
+make web-install   # one-time: install node_modules
+make web-build     # build production bundle into jarvis/web/static/
+make web-dev       # run Vite dev server on :5173 (proxies /api → :8745)
+```
+
+For full-stack dev, run `jarvis web` (backend on :8745) in one terminal and `make web-dev` in another. Navigate to <http://localhost:5173>.

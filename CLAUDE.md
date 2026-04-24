@@ -16,7 +16,13 @@ uv run pytest -m spec                # run only spec-tagged behaviour tests
 uv run ruff check .                  # lint
 uv run ruff format .                 # format
 uv pip install -e .                  # install jarvis CLI in editable mode
-jarvis web                           # start FastAPI dashboard (localhost:8000)
+jarvis web                           # start FastAPI dashboard (localhost:8745)
+
+# Frontend (React + Vite, in frontend/):
+make web-install                      # one-time: install node_modules
+make web-build                        # build → jarvis/web/static/
+make web-dev                          # Vite dev server on :5173 (proxies /api)
+cd frontend && npm run build          # same as web-build
 ```
 
 ## Architecture
@@ -34,7 +40,8 @@ integrations/* → ingest.py → db.py (SQLite) → workflows/* / brain.py → C
 - `jarvis/db.py` — raw sqlite3 (no ORM); FTS5 virtual table on events; ULID primary keys
 - `jarvis/config.py` — pydantic-settings reading `~/.jarvis/config.toml`; credentials go to macOS Keychain via `keyring`
 - `jarvis/integrations/base.py` — `Integration` protocol every source must implement (`fetch_since`, `health_check`)
-- `jarvis/web/app.py` — FastAPI + HTMX + Jinja2; no JS framework, no build step
+- `jarvis/web/app.py` — FastAPI JSON API + SPA shell (serves `jarvis/web/static/`)
+- `frontend/` — React 19 + TypeScript + Vite + Tailwind + TanStack Query; builds into `jarvis/web/static/` which ships in the wheel
 
 **Entity graph:** Events link to Entities (person/repo/ticket/topic) via `event_entities`. `correlator.py` extracts Jira-style ticket IDs from event text; `resolver.py` deduplicates people via Union-Find on name/email prefix matching.
 
