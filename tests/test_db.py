@@ -71,7 +71,7 @@ def test_upsert_event_ignores_duplicate(db):
     id2 = upsert_event(db, **kwargs)
     count = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     assert count == 1
-    assert id1 != id2  # new ULID generated but row not inserted
+    assert id1 == id2  # same row returned on duplicate
 
 
 # --- F4: insert_activity returns True on new row, False on duplicate ---

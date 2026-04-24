@@ -123,14 +123,16 @@
                 <span>{{ m.attendee_count }} attendees</span>
               {% endif %}
               {% if m.meet_link %}
-                <form method="post" action="/api/open-url" style="display:inline;margin:0">
-                  <input type="hidden" name="url" value="{{ m.meet_link }}">
-                  <input type="hidden" name="gh_account" value="{{ acct }}">
-                  <button type="submit" class="join-btn">▶ Join</button>
-                </form>
+                <button class="join-btn"
+                  hx-post="/api/open-url"
+                  hx-vals='{"url": "{{ m.meet_link }}", "gh_account": "{{ acct }}"}'
+                  hx-swap="none">▶ Join</button>
               {% endif %}
               {% if m.url %}
-                <a href="{{ m.url }}" target="_blank" style="font-size:.75em;color:var(--pico-muted-color)">calendar ↗</a>
+                <button class="join-btn" style="border-color:var(--pico-muted-color);color:var(--pico-muted-color)"
+                  hx-post="/api/open-url"
+                  hx-vals='{"url": "{{ m.url }}", "gh_account": "{{ acct }}"}'
+                  hx-swap="none">calendar ↗</button>
               {% endif %}
             </div>
           </div>
