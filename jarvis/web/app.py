@@ -255,7 +255,7 @@ def chat_page(request: Request, session: str | None = Query(None)):
 @app.post("/api/chat/stream")
 def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
     new_id = session_id or str(uuid_mod.uuid4())
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--bare"]
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare"]
     if session_id:
         cmd += ["--resume", session_id]
     else:
@@ -272,21 +272,30 @@ def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
         )
         proc.stdin.write(message)
         proc.stdin.close()
+        error_lines: list[str] = []
         for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
             try:
                 obj = json.loads(line)
-                if obj.get("type") == "content_block_delta":
-                    text = obj.get("delta", {}).get("text", "")
-                    if text:
-                        yield f"data: {json.dumps({'text': text})}\n\n"
-                elif obj.get("type") == "message_stop":
+                t = obj.get("type")
+                # stream-json with --verbose emits {type:"assistant", message:{content:[{type:"text",text:"..."}]}}
+                if t == "assistant":
+                    for block in obj.get("message", {}).get("content", []):
+                        if block.get("type") == "text" and block.get("text"):
+                            yield f"data: {json.dumps({'text': block['text']})}\n\n"
+                elif t == "result":
+                    if obj.get("is_error"):
+                        error_lines.append(obj.get("result", "Unknown error"))
                     yield 'data: {"done": true}\n\n'
             except Exception:
                 pass
+        stderr_out = proc.stderr.read().strip()
         proc.wait()
+        if proc.returncode != 0 or error_lines:
+            msg = error_lines[0] if error_lines else stderr_out or "Claude exited unexpectedly"
+            yield f"data: {json.dumps({'error': msg})}\n\n"
 
     return StreamingResponse(
         generate(),
