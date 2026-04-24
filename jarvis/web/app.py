@@ -1092,20 +1092,12 @@ def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
 
 
 @app.post("/api/prs/{repo_encoded}/{pr_number}/watch")
-def api_prs_watch(repo_encoded: str, pr_number: int, request: Request):
-    import traceback
-
+def api_prs_watch(repo_encoded: str, pr_number: int):
     repo = _repo_decode(repo_encoded)
     conn = get_db()
     set_pr_watch_state(conn, repo, pr_number, "watching")
     conn.close()
-    logger.info(
-        "pr.watch repo=%s pr=%s referer=%s stack=%s",
-        repo,
-        pr_number,
-        request.headers.get("referer", ""),
-        "".join(traceback.format_stack()[-4:-1]),
-    )
+    logger.info("pr.watch repo=%s pr=%s", repo, pr_number)
     return HTMLResponse("")
 
 
