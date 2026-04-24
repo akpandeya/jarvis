@@ -50,6 +50,18 @@
   </button>
 </details>
 
+<details style="margin-bottom:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.75rem 1rem">
+  <summary style="cursor:pointer;font-weight:600;font-size:.9em">Browser Profiles</summary>
+  <p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0 .75rem">
+    Map each GitHub account to a Firefox profile so PRs open in the right browser session.
+  </p>
+  <div id="browser-profile-list"
+       hx-get="/api/settings/browser-profiles"
+       hx-trigger="load">
+    <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
+  </div>
+</details>
+
 {% if subscriptions or filter_repo or filter_author %}
 {# Filter bar — only show when there's something to filter #}
 <form method="get" action="/prs" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;margin-bottom:1rem">
@@ -132,10 +144,12 @@
       hx-on:htmx:after-request="this.textContent='🔍 Detail'">
       🔍 Detail
     </button>
-    <a href="{{ sub.pr_url or '#' }}" target="_blank"
-       role="button" class="outline" style="font-size:.75rem;padding:.2rem .5rem">
+    <button role="button" class="outline" style="font-size:.75rem;padding:.2rem .5rem"
+      hx-post="/api/open-url"
+      hx-vals='{"url": "{{ sub.pr_url or "" }}", "gh_account": "{{ sub.gh_account }}"}'
+      hx-swap="none">
       ↗ GitHub
-    </a>
+    </button>
     <button style="font-size:.75rem;padding:.2rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
       hx-target="closest article"
