@@ -400,3 +400,8 @@ def delete_repo_path(conn: sqlite3.Connection, path_id: str) -> None:
 def set_repo_path_account(conn: sqlite3.Connection, path_id: str, gh_account: str | None) -> None:
     conn.execute("UPDATE repo_paths SET gh_account=? WHERE id=?", (gh_account, path_id))
     conn.commit()
+
+
+def set_repo_path_enabled(conn: sqlite3.Connection, path_id: str, enabled: bool) -> None:
+    conn.execute("UPDATE repo_paths SET enabled=? WHERE id=?", (1 if enabled else 0, path_id))
+    conn.commit()

@@ -18,6 +18,7 @@ from jarvis.db import (
     query_events,
     search_events,
     set_repo_path_account,
+    set_repo_path_enabled,
 )
 from jarvis.patterns import (
     collaboration_frequency,
@@ -504,9 +505,11 @@ def _repos_from_local_paths(config) -> list[str]:
 
 
 def _repos_from_db(conn) -> list[tuple[str, str | None]]:
-    """Return (owner/repo, gh_account) pairs inferred from DB repo_paths table."""
+    """Return (owner/repo, gh_account) pairs for enabled paths only."""
     result = []
     for row in list_repo_paths(conn):
+        if not row.get("enabled", 1):
+            continue
         path = str(Path(row["path"]).expanduser())
         repo = _remote_for_local_repo(path)
         if repo and not any(r == repo for r, _ in result):
@@ -900,10 +903,16 @@ def _repo_paths_fragment(conn) -> str:
         else:
             repo_label = '<span style="color:var(--pico-muted-color)">(not a GitHub repo)</span>'
             acct_select = ""
+        enabled = row.get("enabled", 1)
+        checked = "checked" if enabled else ""
+        muted = "" if enabled else "opacity:.45;"
         items += (
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
-            f'padding:.3rem 0;border-bottom:1px solid var(--pico-muted-border-color)">'
-            f'<span style="font-size:.85em;display:flex;align-items:center;gap:.25rem;flex-wrap:wrap">'
+            f'padding:.3rem 0;border-bottom:1px solid var(--pico-muted-border-color);{muted}">'
+            f'<span style="font-size:.85em;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">'
+            f'<input type="checkbox" {checked} style="margin:0;width:1rem;height:1rem;cursor:pointer"'
+            f' hx-post="/api/settings/repo-paths/{row["id"]}/toggle"'
+            f' hx-target="#repo-paths-list" hx-swap="innerHTML" hx-trigger="change">'
             f"<code>{path}</code> {repo_label}{acct_select}</span>"
             f'<button style="font-size:.75rem;padding:.15rem .5rem;background:none;'
             f'border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"'
@@ -1001,6 +1010,17 @@ def settings_repo_paths_delete(path_id: str):
 def settings_repo_paths_set_account(path_id: str, gh_account: str = Form(...)):
     conn = get_db()
     set_repo_path_account(conn, path_id, gh_account or None)
+    html = _repo_paths_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
+@app.post("/api/settings/repo-paths/{path_id}/toggle", response_class=HTMLResponse)
+def settings_repo_paths_toggle(path_id: str):
+    conn = get_db()
+    row = conn.execute("SELECT enabled FROM repo_paths WHERE id=?", (path_id,)).fetchone()
+    if row:
+        set_repo_path_enabled(conn, path_id, not row["enabled"])
     html = _repo_paths_fragment(conn)
     conn.close()
     return HTMLResponse(html)
