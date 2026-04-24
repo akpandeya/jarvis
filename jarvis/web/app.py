@@ -233,9 +233,43 @@ def sessions_page(
     )
 
 
+def _load_chat_history(session_id: str) -> list[dict]:
+    """Read past turns from ~/.claude/projects/**/<session_id>.jsonl."""
+    import glob
+
+    pattern = str(Path.home() / ".claude" / "projects" / "**" / f"{session_id}.jsonl")
+    matches = glob.glob(pattern, recursive=True)
+    if not matches:
+        return []
+    turns = []
+    try:
+        for line in Path(matches[0]).read_text().splitlines():
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if obj.get("isSidechain"):
+                continue
+            role = obj.get("message", {}).get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content = obj.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                text = "".join(b.get("text", "") for b in content if b.get("type") == "text")
+            else:
+                text = str(content)
+            text = text.strip()
+            if text:
+                turns.append({"role": role, "text": text})
+    except Exception:
+        pass
+    return turns
+
+
 @app.get("/chat", response_class=HTMLResponse)
 def chat_page(request: Request, session: str | None = Query(None)):
     history_preview = ""
+    history: list[dict] = []
     if session:
         conn = get_db()
         row = conn.execute(
@@ -245,10 +279,11 @@ def chat_page(request: Request, session: str | None = Query(None)):
         conn.close()
         if row:
             history_preview = row["title"]
+        history = _load_chat_history(session)
     return templates.TemplateResponse(
         request,
         "chat.html",
-        {"session_id": session or "", "history_preview": history_preview},
+        {"session_id": session or "", "history_preview": history_preview, "history": history},
     )
 
 
