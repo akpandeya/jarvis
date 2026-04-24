@@ -255,7 +255,7 @@ def chat_page(request: Request, session: str | None = Query(None)):
 @app.post("/api/chat/stream")
 def api_chat_stream(message: str = Form(...), session_id: str = Form("")):
     new_id = session_id or str(uuid_mod.uuid4())
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare"]
+    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--bare", "--tools", ""]
     if session_id:
         cmd += ["--resume", session_id]
     else:
