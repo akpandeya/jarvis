@@ -19,6 +19,7 @@ from jarvis.db import (
     search_events,
     set_repo_path_account,
     set_repo_path_enabled,
+    update_pr_cache,
 )
 from jarvis.patterns import (
     collaboration_frequency,
@@ -330,15 +331,25 @@ def _subscription_delete(conn, repo: str, pr_number: int) -> None:
     conn.commit()
 
 
-def _ci_badge(rollup: list | None) -> str:
-    if not rollup:
-        return '<span style="color:var(--pico-muted-color)">⏳</span>'
-    statuses = {r.get("conclusion") or r.get("status") for r in rollup}
-    if "FAILURE" in statuses or "failure" in statuses:
-        return '<span style="color:#f87171">✗ CI Failed</span>'
-    if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
+def _ci_badge(value: list | str | None) -> str:
+    """Accept a statusCheckRollup list (from gh) or a cached string (from DB)."""
+    if isinstance(value, list):
+        if not value:
+            return '<span style="color:var(--pico-muted-color)">–</span>'
+        statuses = {r.get("conclusion") or r.get("status") for r in value}
+        if "FAILURE" in statuses or "failure" in statuses:
+            return '<span style="color:#f87171">✗ CI Failed</span>'
+        if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
+            return '<span style="color:#4ade80">✓ CI Passed</span>'
+        return '<span style="color:var(--pico-muted-color)">⏳ Running</span>'
+    # Cached string from DB
+    if value == "passed":
         return '<span style="color:#4ade80">✓ CI Passed</span>'
-    return '<span style="color:var(--pico-muted-color)">⏳ Running</span>'
+    if value == "failed":
+        return '<span style="color:#f87171">✗ CI Failed</span>'
+    if value == "running":
+        return '<span style="color:var(--pico-muted-color)">⏳ Running</span>'
+    return '<span style="color:var(--pico-muted-color)">–</span>'
 
 
 def _review_badge(decision: str | None) -> str:
@@ -346,37 +357,43 @@ def _review_badge(decision: str | None) -> str:
         return '<span style="color:#4ade80">✓ Approved</span>'
     if decision == "CHANGES_REQUESTED":
         return '<span style="color:#f87171">↩ Changes requested</span>'
+    if decision and decision not in ("", "REVIEW_REQUIRED"):
+        return f'<span style="color:var(--pico-muted-color)">{decision}</span>'
     return '<span style="color:var(--pico-muted-color)">Review pending</span>'
 
 
-def _enrich_subscriptions(conn, subs: list[dict]) -> list[dict]:
-    enriched = []
-    for sub in subs:
-        pr_data = _gh(
-            "pr",
-            "view",
-            str(sub["pr_number"]),
-            "--json",
-            "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
-            repo=sub["repo"],
-        )
-        if pr_data:
-            sub["live"] = pr_data
-            if pr_data.get("state") in ("MERGED", "CLOSED"):
-                conn.execute(
-                    "UPDATE pr_subscriptions SET state=? WHERE repo=? AND pr_number=?",
-                    (pr_data["state"].lower(), sub["repo"], sub["pr_number"]),
-                )
-                conn.commit()
-                sub["state"] = pr_data["state"].lower()
-        else:
-            sub["live"] = None
-        sub["ci_badge"] = _ci_badge(sub["live"].get("statusCheckRollup") if sub["live"] else None)
-        sub["review_badge"] = _review_badge(
-            sub["live"].get("reviewDecision") if sub["live"] else None
-        )
-        enriched.append(sub)
-    return enriched
+def _parse_ci_status(pr_data: dict) -> str | None:
+    """Collapse statusCheckRollup into a simple string for DB storage."""
+    rollup = pr_data.get("statusCheckRollup") or []
+    if not rollup:
+        return None
+    statuses = {r.get("conclusion") or r.get("status") for r in rollup}
+    if "FAILURE" in statuses or "failure" in statuses:
+        return "failed"
+    if all(s in ("SUCCESS", "success", "NEUTRAL", "SKIPPED") for s in statuses if s):
+        return "passed"
+    return "running"
+
+
+def _token_for_repo(conn, repo: str) -> str | None:
+    """Return a GH_TOKEN for the account associated with this repo in DB paths."""
+    for row in list_repo_paths(conn):
+        path = str(Path(row["path"]).expanduser())
+        if _remote_for_local_repo(path) == repo and row.get("gh_account"):
+            return _gh_token(row["gh_account"])
+    return None
+
+
+def _add_badges(sub: dict) -> dict:
+    """Attach ci_badge and review_badge HTML to a subscription dict (uses cached DB fields)."""
+    sub["ci_badge"] = _ci_badge(sub.get("ci_status"))
+    sub["review_badge"] = _review_badge(sub.get("review_decision"))
+    return sub
+
+
+def _badge_fragment(sub: dict) -> str:
+    """Return just the badge span HTML for HTMX swap into #badges-{pr_number}."""
+    return f"{sub['ci_badge']} &nbsp; {sub['review_badge']}"
 
 
 @app.get("/prs", response_class=HTMLResponse)
@@ -386,8 +403,8 @@ def prs_page(
     author: str | None = Query(None),
 ):
     conn = get_db()
-    active = _enrich_subscriptions(conn, _subscriptions_active(conn))
-    dismissed = _subscriptions_dismissed(conn)  # no live fetch for dismissed
+    active = [_add_badges(s) for s in _subscriptions_active(conn)]
+    dismissed = _subscriptions_dismissed(conn)
 
     # Build filter option lists from all active subs
     all_repos = sorted({s["repo"] for s in active})
@@ -592,10 +609,13 @@ def api_prs_discover():
     if not prs:
         return HTMLResponse('<p style="color:var(--pico-muted-color)">No open PRs found.</p>')
 
-    # Auto-subscribe all discovered PRs (dismissed ones stay dismissed; page reload shows them)
+    # Auto-subscribe all discovered PRs and write CI/review cache
     conn2 = get_db()
     for pr in prs:
         _subscription_upsert(conn2, pr["repo"], pr["number"], pr)
+        ci = _parse_ci_status(pr)
+        rd = pr.get("reviewDecision") or ""
+        update_pr_cache(conn2, pr["repo"], pr["number"], ci, rd)
     conn2.close()
 
     new_count = len(prs)
@@ -658,6 +678,89 @@ def api_prs_undismiss(repo_encoded: str, pr_number: int):
     conn.commit()
     conn.close()
     return HTMLResponse("")
+
+
+@app.get("/api/prs/{repo_encoded}/{pr_number}/refresh")
+def api_pr_refresh(repo_encoded: str, pr_number: int):
+    """Fetch live data for one PR, update cache, return badge HTML."""
+    import os
+
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    token = _token_for_repo(conn, repo)
+    env = {**os.environ, "GH_TOKEN": token} if token else None
+    data = _gh(
+        "pr",
+        "view",
+        str(pr_number),
+        "--json",
+        "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
+        repo=repo,
+        env=env,
+    )
+    if data:
+        ci = _parse_ci_status(data)
+        rd = data.get("reviewDecision") or ""
+        update_pr_cache(
+            conn,
+            repo,
+            pr_number,
+            ci,
+            rd,
+            title=data.get("title"),
+            author=(data.get("author") or {}).get("login"),
+            branch=data.get("headRefName"),
+            pr_url=data.get("url"),
+            state=(data.get("state") or "").lower() or None,
+        )
+        sub = {"ci_badge": _ci_badge(ci), "review_badge": _review_badge(rd)}
+    else:
+        sub = {"ci_badge": '<span style="color:#f87171">error</span>', "review_badge": ""}
+    conn.close()
+    return HTMLResponse(_badge_fragment(sub))
+
+
+@app.post("/api/prs/refresh-all")
+def api_prs_refresh_all():
+    """Fetch live data for all active PRs and update cache. Returns status HTML."""
+    import os
+
+    conn = get_db()
+    subs = _subscriptions_active(conn)
+    updated = 0
+    for sub in subs:
+        repo = sub["repo"]
+        token = _token_for_repo(conn, repo)
+        env = {**os.environ, "GH_TOKEN": token} if token else None
+        data = _gh(
+            "pr",
+            "view",
+            str(sub["pr_number"]),
+            "--json",
+            "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
+            repo=repo,
+            env=env,
+        )
+        if data:
+            ci = _parse_ci_status(data)
+            rd = data.get("reviewDecision") or ""
+            update_pr_cache(
+                conn,
+                repo,
+                sub["pr_number"],
+                ci,
+                rd,
+                title=data.get("title"),
+                author=(data.get("author") or {}).get("login"),
+                branch=data.get("headRefName"),
+                pr_url=data.get("url"),
+                state=(data.get("state") or "").lower() or None,
+            )
+            updated += 1
+    conn.close()
+    return HTMLResponse(
+        f'<span style="color:#4ade80;font-size:.85em">✓ {updated} PR{"s" if updated != 1 else ""} refreshed</span>'
+    )
 
 
 @app.get("/api/prs/{repo_encoded}/{pr_number}/detail")

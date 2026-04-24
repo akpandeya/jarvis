@@ -15,6 +15,15 @@
       hx-on:htmx:after-request="this.disabled=false;this.textContent='↻ Discover PRs';setTimeout(()=>location.reload(),1500)">
       ↻ Discover PRs
     </button>
+    <button style="font-size:.75rem;padding:.25rem .75rem"
+      hx-post="/api/prs/refresh-all"
+      hx-target="#refresh-status"
+      hx-swap="innerHTML"
+      hx-on:htmx:before-request="this.disabled=true;this.textContent='Refreshing…'"
+      hx-on:htmx:after-request="this.disabled=false;this.textContent='↻ Refresh all';setTimeout(()=>location.reload(),800)">
+      ↻ Refresh all
+    </button>
+    <span id="refresh-status"></span>
   </div>
 </div>
 
@@ -97,9 +106,20 @@
       </div>
     </div>
     <div style="font-size:.85em;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-      {{ sub.ci_badge | safe }}
-      &nbsp;
-      {{ sub.review_badge | safe }}
+      <span id="badges-{{ sub.pr_number }}">
+        {{ sub.ci_badge | safe }}
+        &nbsp;
+        {{ sub.review_badge | safe }}
+      </span>
+      <button style="font-size:.75rem;padding:.1rem .35rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color);cursor:pointer"
+        title="Refresh status"
+        hx-get="/api/prs/{{ encoded }}/{{ sub.pr_number }}/refresh"
+        hx-target="#badges-{{ sub.pr_number }}"
+        hx-swap="innerHTML"
+        hx-on:htmx:before-request="this.textContent='…'"
+        hx-on:htmx:after-request="this.textContent='↻'">
+        ↻
+      </button>
     </div>
   </div>
 

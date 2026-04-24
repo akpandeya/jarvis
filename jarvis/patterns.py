@@ -86,7 +86,7 @@ def context_switches(conn: sqlite3.Connection | None = None, days: int = 7) -> d
     daily_switches = {}
     for date_key, day_events in sorted(by_date.items()):
         # Sort by time
-        day_events.sort(key=lambda e: e.happened_at)
+        day_events.sort(key=lambda e: e.happened_at.replace(tzinfo=None))
         switches = 0
         prev_project = None
         for e in day_events:
