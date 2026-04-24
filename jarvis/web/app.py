@@ -421,7 +421,7 @@ def _remote_for_local_repo(path: str) -> str | None:
         # SSH: git@github.com:owner/repo.git  or HTTPS: https://github.com/owner/repo.git
         import re
 
-        m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
+        m = re.search(r"github\.com[^:/]*[:/](.+?)(?:\.git)?$", url)
         return m.group(1) if m else None
     except Exception:
         return None
