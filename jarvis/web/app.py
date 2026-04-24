@@ -730,6 +730,8 @@ def prs_page(
         review_model = "claude-opus-4-7"
     conn.close()
 
+    available_models = _claude_models()
+
     ide = _detect_ide()
     return templates.TemplateResponse(
         request,
@@ -745,8 +747,36 @@ def prs_page(
             "filter_repo": repo or "",
             "filter_author": author or "",
             "review_model": review_model,
+            "available_models": available_models,
         },
     )
+
+
+def _claude_models() -> list[dict]:
+    """Read model IDs from ~/.claude/settings.json env vars. Falls back to known defaults."""
+    _defaults = [
+        {"label": "Opus 4.7", "id": "claude-opus-4-7"},
+        {"label": "Sonnet 4.6", "id": "claude-sonnet-4-6"},
+        {"label": "Haiku 4.5", "id": "claude-haiku-4-5-20251001"},
+    ]
+    settings_path = Path.home() / ".claude" / "settings.json"
+    if not settings_path.exists():
+        return _defaults
+    try:
+        data = json.loads(settings_path.read_text())
+        env = data.get("env", {})
+        models = []
+        for label, key in [
+            ("Opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            ("Sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+            ("Haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+        ]:
+            model_id = env.get(key)
+            if model_id:
+                models.append({"label": label, "id": model_id})
+        return models or _defaults
+    except Exception:
+        return _defaults
 
 
 def _gh_accounts() -> list[str]:
