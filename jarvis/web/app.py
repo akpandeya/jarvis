@@ -621,7 +621,17 @@ def _firefox_profiles() -> list[dict]:
 def _profile_for_account(conn, account: str) -> str | None:
     from jarvis.db import kv_get
 
-    return kv_get(conn, f"browser_profile:{account}") if account else None
+    if not account:
+        return None
+    # Direct gh-account → profile mapping (set in PRs settings panel)
+    profile = kv_get(conn, f"browser_profile:{account}")
+    if profile:
+        return profile
+    # Indirect: gcal/calendar account name → gh account → profile
+    gh_account = kv_get(conn, f"gcal_gh_account:{account}")
+    if gh_account:
+        return kv_get(conn, f"browser_profile:{gh_account}")
+    return None
 
 
 def _browser_profile_fragment(conn) -> str:
@@ -1067,6 +1077,61 @@ def api_open_url(url: str = Form(...), gh_account: str = Form("")):
     else:
         subprocess.Popen(["open", url])
     return HTMLResponse("")
+
+
+def _gcal_account_map_fragment(conn) -> str:
+    """HTML fragment: map each gcal account name to a gh account for Firefox profile lookup."""
+    from jarvis.config import JarvisConfig
+    from jarvis.db import kv_get
+
+    gh_accounts = _gh_accounts()
+    if not gh_accounts:
+        return (
+            '<p style="font-size:.85em;color:var(--pico-muted-color)">No gh accounts detected.</p>'
+        )
+    try:
+        gcal_accounts = [a.name for a in JarvisConfig.load().gcal.accounts]
+    except Exception:
+        gcal_accounts = []
+    if not gcal_accounts:
+        return '<p style="font-size:.85em;color:var(--pico-muted-color)">No gcal accounts configured.</p>'
+    rows = ""
+    for cal_acct in gcal_accounts:
+        current = kv_get(conn, f"gcal_gh_account:{cal_acct}") or ""
+        opts = '<option value="">— none —</option>'
+        for gh in gh_accounts:
+            sel = " selected" if gh == current else ""
+            opts += f'<option value="{gh}"{sel}>{gh}</option>'
+        rows += (
+            f'<div style="display:flex;align-items:center;gap:.75rem;padding:.3rem 0;'
+            f'border-bottom:1px solid var(--pico-muted-border-color)">'
+            f'<span style="font-size:.85em;min-width:9rem"><code>{cal_acct}</code></span>'
+            f'<select style="font-size:.8rem;padding:.15rem .4rem;margin:0"'
+            f' hx-post="/api/settings/gcal-account/{cal_acct}"'
+            f' hx-target="#gcal-account-map-list" hx-swap="innerHTML"'
+            f' hx-trigger="change">{opts}</select>'
+            f"</div>"
+        )
+    return rows
+
+
+@app.get("/api/settings/gcal-account-map", response_class=HTMLResponse)
+def settings_gcal_account_map_get():
+    conn = get_db()
+    html = _gcal_account_map_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
+@app.post("/api/settings/gcal-account/{cal_account}", response_class=HTMLResponse)
+def settings_gcal_account_set(cal_account: str, profile: str = Form("")):
+    from jarvis.db import kv_set
+
+    conn = get_db()
+    kv_set(conn, f"gcal_gh_account:{cal_account}", profile)
+    html = _gcal_account_map_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
 
 
 @app.get("/api/settings/browser-profiles", response_class=HTMLResponse)
