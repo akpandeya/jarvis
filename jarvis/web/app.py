@@ -391,6 +391,59 @@ def _add_badges(sub: dict) -> dict:
     return sub
 
 
+def _firefox_installed() -> bool:
+    return Path("/Applications/Firefox.app").exists()
+
+
+def _firefox_profiles() -> list[str]:
+    import configparser
+
+    ini = Path.home() / "Library/Application Support/Firefox/profiles.ini"
+    if not ini.exists():
+        return []
+    cfg = configparser.ConfigParser()
+    cfg.read(str(ini))
+    return [cfg[s]["Name"] for s in cfg.sections() if s.startswith("Profile") and "Name" in cfg[s]]
+
+
+def _profile_for_account(conn, account: str) -> str | None:
+    from jarvis.db import kv_get
+
+    return kv_get(conn, f"browser_profile:{account}") if account else None
+
+
+def _browser_profile_fragment(conn) -> str:
+    from jarvis.db import kv_get
+
+    if not _firefox_installed():
+        return '<p style="font-size:.85em;color:var(--pico-muted-color)">Firefox not found — links open in default browser.</p>'
+    profiles = _firefox_profiles()
+    accounts = _gh_accounts()
+    if not accounts:
+        return (
+            '<p style="font-size:.85em;color:var(--pico-muted-color)">No gh accounts detected.</p>'
+        )
+    rows = ""
+    for acct in accounts:
+        current = kv_get(conn, f"browser_profile:{acct}") or ""
+        opts = '<option value="">— default browser —</option>'
+        for p in profiles:
+            sel = " selected" if p == current else ""
+            opts += f'<option value="{p}"{sel}>{p}</option>'
+        rows += (
+            f'<div style="display:flex;align-items:center;gap:.75rem;padding:.3rem 0;'
+            f'border-bottom:1px solid var(--pico-muted-border-color)">'
+            f'<span style="font-size:.85em;min-width:9rem"><code>{acct}</code></span>'
+            f'<select style="font-size:.8rem;padding:.15rem .4rem;margin:0"'
+            f' name="profile"'
+            f' hx-post="/api/settings/browser-profile/{acct}"'
+            f' hx-target="#browser-profile-list" hx-swap="innerHTML"'
+            f' hx-trigger="change">{opts}</select>'
+            f"</div>"
+        )
+    return rows
+
+
 def _badge_fragment(sub: dict) -> str:
     """Return just the badge span HTML for HTMX swap into #badges-{pr_number}."""
     return f"{sub['ci_badge']} &nbsp; {sub['review_badge']}"
@@ -405,6 +458,15 @@ def prs_page(
     conn = get_db()
     active = [_add_badges(s) for s in _subscriptions_active(conn)]
     dismissed = _subscriptions_dismissed(conn)
+
+    # Attach gh_account to each sub so the template can pass it to /api/open-url
+    repo_account_map = {
+        _remote_for_local_repo(str(Path(r["path"]).expanduser())): r["gh_account"]
+        for r in list_repo_paths(conn)
+        if r.get("gh_account")
+    }
+    for sub in active:
+        sub["gh_account"] = repo_account_map.get(sub["repo"]) or ""
 
     # Build filter option lists from all active subs
     all_repos = sorted({s["repo"] for s in active})
@@ -761,6 +823,40 @@ def api_prs_refresh_all():
     return HTMLResponse(
         f'<span style="color:#4ade80;font-size:.85em">✓ {updated} PR{"s" if updated != 1 else ""} refreshed</span>'
     )
+
+
+@app.post("/api/open-url")
+def api_open_url(url: str = Form(...), gh_account: str = Form("")):
+    """Open a URL in the correct Firefox profile (or default browser) for the given account."""
+    import subprocess
+
+    conn = get_db()
+    profile = _profile_for_account(conn, gh_account or None)
+    conn.close()
+    if _firefox_installed() and profile:
+        subprocess.Popen(["open", "-na", "Firefox", "--args", "-P", profile, url])
+    else:
+        subprocess.Popen(["open", url])
+    return HTMLResponse("")
+
+
+@app.get("/api/settings/browser-profiles", response_class=HTMLResponse)
+def settings_browser_profiles_get():
+    conn = get_db()
+    html = _browser_profile_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
+@app.post("/api/settings/browser-profile/{account}", response_class=HTMLResponse)
+def settings_browser_profile_set(account: str, profile: str = Form("")):
+    from jarvis.db import kv_set
+
+    conn = get_db()
+    kv_set(conn, f"browser_profile:{account}", profile)
+    html = _browser_profile_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
 
 
 @app.get("/api/prs/{repo_encoded}/{pr_number}/detail")
