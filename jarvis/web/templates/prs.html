@@ -218,19 +218,27 @@
 
     {# Claude review #}
     {% if sub.chat_session_id %}
-      <a href="/chat?session={{ sub.chat_session_id }}" class="btn-sm btn-sm-primary" style="text-decoration:none">↩ Continue review</a>
+      <a href="/chat?session={{ sub.chat_session_id }}" class="btn-sm btn-sm-primary" style="text-decoration:none">↩ Continue</a>
+      <form method="post" action="/api/prs/{{ encoded }}/{{ sub.pr_number }}/rereview" style="display:inline;margin:0">
+        <select name="model" style="font-size:.72rem;padding:.15rem .35rem;margin:0;border-radius:4px;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)">
+          <option value="">default ({{ review_model }})</option>
+          {% for m in available_models %}
+          <option value="{{ m.id }}">{{ m.label }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn-sm btn-sm-primary">↻ Re-review</button>
+      </form>
+    {% else %}
+      <form method="post" action="/api/prs/{{ encoded }}/{{ sub.pr_number }}/review" style="display:inline;margin:0">
+        <select name="model" style="font-size:.72rem;padding:.15rem .35rem;margin:0;border-radius:4px;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)">
+          <option value="">default ({{ review_model }})</option>
+          {% for m in available_models %}
+          <option value="{{ m.id }}">{{ m.label }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn-sm btn-sm-primary">Ask Claude</button>
+      </form>
     {% endif %}
-    <form method="post" action="/api/prs/{{ encoded }}/{{ sub.pr_number }}/review" style="display:inline;margin:0">
-      <select name="model" style="font-size:.72rem;padding:.15rem .35rem;margin:0;border-radius:4px;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)">
-        <option value="">default ({{ review_model }})</option>
-        {% for m in available_models %}
-        <option value="{{ m.id }}">{{ m.label }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" class="btn-sm btn-sm-primary">
-        {% if sub.chat_session_id %}↻ Re-review{% else %}Ask Claude{% endif %}
-      </button>
-    </form>
 
     <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
