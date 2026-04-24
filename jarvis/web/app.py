@@ -51,6 +51,7 @@ from jarvis.patterns import (
     source_distribution,
     time_of_day_distribution,
 )
+from jarvis.pr_refresh import refresh_one
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -879,35 +880,7 @@ def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
 def api_pr_refresh(repo_encoded: str, pr_number: int):
     repo = _repo_decode(repo_encoded)
     conn = get_db()
-    token = _token_for_repo(conn, repo)
-    env = {**os.environ, "GH_TOKEN": token} if token else None
-    data = _gh(
-        "pr",
-        "view",
-        str(pr_number),
-        "--json",
-        "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
-        repo=repo,
-        env=env,
-    )
-    if data:
-        ci = _parse_ci_status(data)
-        rd = data.get("reviewDecision") or ""
-        update_pr_cache(
-            conn,
-            repo,
-            pr_number,
-            ci,
-            rd,
-            title=data.get("title"),
-            author=(data.get("author") or {}).get("login"),
-            branch=data.get("headRefName"),
-            pr_url=data.get("url"),
-            state=(data.get("state") or "").lower() or None,
-        )
-        pr_state = (data.get("state") or "").lower()
-        if pr_state in ("merged", "closed"):
-            set_pr_watch_state(conn, repo, pr_number, "dismissed")
+    refresh_one(conn, {"repo": repo, "pr_number": pr_number})
     sub = _fetch_subscription(conn, repo, pr_number)
     conn.close()
     return {"ok": True, "subscription": sub}
@@ -917,43 +890,29 @@ def api_pr_refresh(repo_encoded: str, pr_number: int):
 def api_prs_refresh_all():
     conn = get_db()
     subs = _subscriptions_active(conn)
-    updated = 0
-    for sub in subs:
-        repo = sub["repo"]
-        token = _token_for_repo(conn, repo)
-        env = {**os.environ, "GH_TOKEN": token} if token else None
-        data = _gh(
-            "pr",
-            "view",
-            str(sub["pr_number"]),
-            "--json",
-            "title,number,headRefName,url,author,reviewDecision,statusCheckRollup,state",
-            repo=repo,
-            env=env,
-        )
-        if data:
-            ci = _parse_ci_status(data)
-            rd = data.get("reviewDecision") or ""
-            update_pr_cache(
-                conn,
-                repo,
-                sub["pr_number"],
-                ci,
-                rd,
-                title=data.get("title"),
-                author=(data.get("author") or {}).get("login"),
-                branch=data.get("headRefName"),
-                pr_url=data.get("url"),
-                state=(data.get("state") or "").lower() or None,
-            )
-            pr_state = (data.get("state") or "").lower()
-            if pr_state in ("merged", "closed"):
-                set_pr_watch_state(conn, repo, sub["pr_number"], "dismissed")
-            updated += 1
+    updated = sum(1 for sub in subs if refresh_one(conn, sub))
     kv_set(conn, "last_pr_check_at", datetime.now(UTC).isoformat())
     conn.close()
     logger.info("refresh_all updated=%d", updated)
     return {"ok": True, "updated": updated}
+
+
+@app.post("/api/prs/refresh-running")
+def api_prs_refresh_running():
+    """Refresh only the watched PRs whose cached CI status is still "running"."""
+    conn = get_db()
+    targets = [s for s in subscriptions_watching(conn) if s.get("ci_status") == "running"]
+    refreshed = 0
+    still_running = 0
+    for sub in targets:
+        if refresh_one(conn, sub):
+            refreshed += 1
+            reloaded = _fetch_subscription(conn, sub["repo"], sub["pr_number"])
+            if reloaded and reloaded.get("ci_status") == "running":
+                still_running += 1
+    conn.close()
+    logger.info("refresh_running refreshed=%d still_running=%d", refreshed, still_running)
+    return {"ok": True, "refreshed": refreshed, "still_running": still_running}
 
 
 @app.post("/api/prs/discover")

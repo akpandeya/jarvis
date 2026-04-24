@@ -169,6 +169,12 @@ export interface RefreshAllResponse {
   updated: number;
 }
 
+export interface RefreshRunningResponse {
+  ok: boolean;
+  refreshed: number;
+  still_running: number;
+}
+
 export interface PendingCountResponse {
   count: number;
 }

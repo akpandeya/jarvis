@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "../../lib/api";
 import { keys, queryClient } from "../../lib/queryClient";
+import { usePollRunning } from "../../hooks/usePollRunning";
 import { PrCard } from "./PrCard";
 import { PendingRow, LaterRow, DismissedRow } from "./SimpleRows";
 import { btnSm } from "./buttons";
@@ -69,6 +70,8 @@ export default function Prs() {
     const list = data?.watching ?? [];
     return [...list].sort((a, b) => b.priority - a.priority);
   }, [data]);
+
+  usePollRunning(watching);
 
   if (isLoading || !data) return <p>Loading…</p>;
 

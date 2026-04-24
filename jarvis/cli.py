@@ -778,6 +778,45 @@ def pr_fix(
     )
 
 
+@pr_app.command("refresh-watching")
+def pr_refresh_watching(
+    only_running: bool = typer.Option(
+        False, "--only-running", help="Refresh only PRs whose cached CI status is 'running'."
+    ),
+    respect_hours: bool = typer.Option(
+        False,
+        "--respect-hours",
+        help="Skip silently if current local hour is outside 09:00–17:00.",
+    ),
+) -> None:
+    """Refresh cached GitHub state for every watched PR (used by launchd background job)."""
+    import logging
+    from datetime import UTC, datetime
+
+    from jarvis.db import kv_set, subscriptions_watching
+    from jarvis.pr_refresh import refresh_one
+
+    log = logging.getLogger("jarvis.cli.pr_refresh_watching")
+
+    if respect_hours:
+        hour = datetime.now().hour
+        if hour < 9 or hour >= 17:
+            log.info("pr refresh-watching: outside work hours (hour=%d) — skipping", hour)
+            return
+
+    conn = get_db()
+    subs = subscriptions_watching(conn)
+    if only_running:
+        subs = [s for s in subs if s.get("ci_status") == "running"]
+    refreshed = 0
+    for sub in subs:
+        if refresh_one(conn, sub):
+            refreshed += 1
+    kv_set(conn, "last_pr_check_at", datetime.now(UTC).isoformat())
+    conn.close()
+    console.print(f"[green]✓ Refreshed[/green] {refreshed} PR(s).")
+
+
 # --- Schedule subcommands ---
 
 schedule_app = typer.Typer(help="Manage automatic ingestion schedule")
@@ -895,6 +934,114 @@ def schedule_status() -> None:
                     console.print(f"  {line}")
     else:
         console.print("[yellow]Not running.[/yellow] Install with `jarvis schedule install`.")
+
+
+# --- schedule-pr-refresh: hourly background refresh of watched PR status ---
+
+pr_refresh_app = typer.Typer(help="Background refresh of watched PR CI status (launchd).")
+app.add_typer(pr_refresh_app, name="schedule-pr-refresh")
+
+_PR_REFRESH_PLIST_NAME = "com.jarvis.pr_refresh"
+_PR_REFRESH_PLIST_PATH = (
+    Path.home() / "Library" / "LaunchAgents" / f"{_PR_REFRESH_PLIST_NAME}.plist"
+)
+
+
+@pr_refresh_app.command("install")
+def pr_refresh_install(
+    interval: int = typer.Option(3600, help="Seconds between runs (default: 3600 = 1 hour)."),
+) -> None:
+    """Install a launchd agent that refreshes watched PRs hourly during work hours."""
+    import subprocess
+
+    jarvis_bin = _find_jarvis_bin()
+    parts = jarvis_bin.split() if " " in jarvis_bin else [jarvis_bin]
+    program_args = parts + ["pr", "refresh-watching", "--respect-hours"]
+
+    log_path = JARVIS_HOME / "pr_refresh.log"
+    local_bin = Path.home() / ".local" / "bin"
+    path_val = f"/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:{local_bin}"
+    args_xml = "".join(f"<string>{a}</string>" for a in program_args)
+
+    plist_content = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{_PR_REFRESH_PLIST_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>{args_xml}</array>
+    <key>StartInterval</key>
+    <integer>{interval}</integer>
+    <key>StandardOutPath</key>
+    <string>{log_path}</string>
+    <key>StandardErrorPath</key>
+    <string>{log_path}</string>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path_val}</string>
+    </dict>
+</dict>
+</plist>
+"""
+    _PR_REFRESH_PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _PR_REFRESH_PLIST_PATH.write_text(plist_content)
+
+    subprocess.run(["launchctl", "unload", str(_PR_REFRESH_PLIST_PATH)], capture_output=True)
+    result = subprocess.run(
+        ["launchctl", "load", str(_PR_REFRESH_PLIST_PATH)], capture_output=True, text=True
+    )
+
+    if result.returncode == 0:
+        console.print(
+            f"[green]Installed.[/green] Jarvis will refresh watched PRs every "
+            f"{interval // 60} min during 09:00–17:00 local time."
+        )
+        console.print(f"  Plist: {_PR_REFRESH_PLIST_PATH}")
+        console.print(f"  Log: {log_path}")
+    else:
+        console.print(f"[red]Failed to load:[/red] {result.stderr}")
+
+
+@pr_refresh_app.command("uninstall")
+def pr_refresh_uninstall() -> None:
+    """Remove the PR-refresh launchd schedule."""
+    import subprocess
+
+    if _PR_REFRESH_PLIST_PATH.exists():
+        subprocess.run(["launchctl", "unload", str(_PR_REFRESH_PLIST_PATH)], capture_output=True)
+        _PR_REFRESH_PLIST_PATH.unlink()
+        console.print("[green]Uninstalled.[/green] Background PR refresh stopped.")
+    else:
+        console.print("[yellow]No schedule found.[/yellow]")
+
+
+@pr_refresh_app.command("status")
+def pr_refresh_status() -> None:
+    """Show whether the PR-refresh background job is installed and its last log lines."""
+    import subprocess
+
+    result = subprocess.run(
+        ["launchctl", "list", _PR_REFRESH_PLIST_NAME], capture_output=True, text=True
+    )
+    if result.returncode == 0:
+        console.print(f"[green]Running.[/green] Plist: {_PR_REFRESH_PLIST_PATH}")
+        log_path = JARVIS_HOME / "pr_refresh.log"
+        if log_path.exists():
+            lines = log_path.read_text().strip().splitlines()
+            if lines:
+                console.print("\nLast log lines:")
+                for line in lines[-5:]:
+                    console.print(f"  {line}")
+    else:
+        console.print(
+            "[yellow]Not running.[/yellow] Install with `jarvis schedule-pr-refresh install`."
+        )
 
 
 @app.command()

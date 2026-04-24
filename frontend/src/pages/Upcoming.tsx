@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { api } from "../lib/api";
 import { keys, queryClient } from "../lib/queryClient";
 import { AccountBadge } from "../components/AccountBadge";
+import { usePollRunning } from "../hooks/usePollRunning";
 import { CiBadge, ReviewBadge } from "./Prs/badges";
 import type { Meeting, PrSubscription } from "../lib/types";
 
@@ -265,6 +266,8 @@ export default function Upcoming() {
 
   // Touch the query client so a future invalidation in another tab works.
   void queryClient;
+
+  usePollRunning(data?.top_prs ?? []);
 
   if (isLoading || !data) return <p>Loading…</p>;
 
