@@ -864,7 +864,9 @@ def api_open_url(url: str = Form(...), gh_account: str = Form("")):
         base = Path.home() / "Library/Application Support/Firefox"
         abs_profile = base / profile_path
         firefox_bin = "/Applications/Firefox.app/Contents/MacOS/firefox"
-        subprocess.Popen([firefox_bin, "--profile", str(abs_profile), "--new-window", url])
+        subprocess.Popen(
+            [firefox_bin, "--no-remote", "--profile", str(abs_profile), "--new-window", url]
+        )
     else:
         subprocess.Popen(["open", url])
     return HTMLResponse("")
