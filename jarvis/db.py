@@ -39,12 +39,31 @@ def init_db(db_path: Path | None = None) -> None:
     repo_migrations = Path(__file__).parent.parent / "migrations"
     migrations_dir = pkg_migrations if pkg_migrations.exists() else repo_migrations
     for migration in sorted(migrations_dir.glob("*.sql")):
-        try:
-            conn.executescript(migration.read_text())
-        except sqlite3.OperationalError as e:
-            # Tolerate "duplicate column" from ALTER TABLE on already-migrated DBs
-            if "duplicate column" not in str(e):
+        sql = migration.read_text()
+        # First try running each statement individually so a "duplicate column" on
+        # one ALTER TABLE doesn't block later statements in the same file.
+        statements = [s.strip() for s in sql.split(";") if s.strip()]
+        all_simple = True
+        for stmt in statements:
+            try:
+                conn.execute(stmt)
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                err = str(e)
+                if "duplicate column" in err:
+                    continue
+                if "incomplete input" in err or "syntax error" in err:
+                    # Statement contains multi-line SQL (e.g. CREATE TABLE) that
+                    # can't be split on ";". Fall back to executescript for the file.
+                    all_simple = False
+                    break
                 raise
+        if not all_simple:
+            try:
+                conn.executescript(sql)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e):
+                    raise
     conn.close()
 
 
