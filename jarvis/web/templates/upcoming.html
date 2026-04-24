@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active = "upcoming" %}
-{% block title %}Upcoming{% endblock %}
+{% block title %}Focus{% endblock %}
 {% block content %}
 
 <style>
@@ -99,7 +99,7 @@
 </style>
 
 <div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:1rem">
-  <h2 style="margin:0">Upcoming</h2>
+  <h2 style="margin:0">Focus</h2>
   <span style="font-size:.85em;color:var(--pico-muted-color)">
     {{ today.strftime("%A, %B %-d") }}
   </span>
@@ -158,11 +158,14 @@
     {% endif %}
   </section>
 
-  {# ── Right: PR Blockers ── #}
+  {# ── Right: Top PRs ── #}
   <aside>
-    <div class="section-header">PR Blockers</div>
-    {% if blockers %}
-      {% for sub in blockers %}
+    <div class="section-header" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Top PRs</span>
+      <a href="/prs" style="font-size:.78em;font-weight:400;text-transform:none;letter-spacing:0;color:var(--pico-muted-color)">all PRs ↗</a>
+    </div>
+    {% if top_prs %}
+      {% for sub in top_prs %}
         {% set encoded = sub.repo | replace("/", "--") %}
         <div class="blocker-card">
           <div class="blocker-title">
@@ -174,12 +177,14 @@
             <span>{{ sub.repo }}</span>
             <span>{{ sub.ci_badge | safe }}</span>
             <span>{{ sub.review_badge | safe }}</span>
-            <a href="/prs" style="font-size:.75em;color:var(--pico-muted-color)">details ↗</a>
+            {% if sub.priority %}
+              <span style="font-size:.75em;color:var(--pico-primary);font-weight:600">p{{ sub.priority }}</span>
+            {% endif %}
           </div>
         </div>
       {% endfor %}
     {% else %}
-      <div class="empty-state">No blockers 🎉</div>
+      <div class="empty-state">No watched PRs</div>
     {% endif %}
   </aside>
 

@@ -443,7 +443,7 @@ def subscriptions_watching(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT * FROM pr_subscriptions"
         " WHERE watch_state='watching' AND state='open'"
-        " ORDER BY subscribed_at DESC"
+        " ORDER BY priority DESC, subscribed_at DESC"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -475,6 +475,14 @@ def set_pr_watch_state(conn: sqlite3.Connection, repo: str, pr_number: int, stat
     conn.execute(
         "UPDATE pr_subscriptions SET watch_state=? WHERE repo=? AND pr_number=?",
         (state, repo, pr_number),
+    )
+    conn.commit()
+
+
+def set_pr_priority(conn: sqlite3.Connection, repo: str, pr_number: int, priority: int) -> None:
+    conn.execute(
+        "UPDATE pr_subscriptions SET priority=? WHERE repo=? AND pr_number=?",
+        (priority, repo, pr_number),
     )
     conn.commit()
 
