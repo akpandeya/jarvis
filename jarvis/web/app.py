@@ -1106,7 +1106,7 @@ def _gcal_account_map_fragment(conn) -> str:
             f'<div style="display:flex;align-items:center;gap:.75rem;padding:.3rem 0;'
             f'border-bottom:1px solid var(--pico-muted-border-color)">'
             f'<span style="font-size:.85em;min-width:9rem"><code>{cal_acct}</code></span>'
-            f'<select style="font-size:.8rem;padding:.15rem .4rem;margin:0"'
+            f'<select name="profile" style="font-size:.8rem;padding:.15rem .4rem;margin:0"'
             f' hx-post="/api/settings/gcal-account/{cal_acct}"'
             f' hx-target="#gcal-account-map-list" hx-swap="innerHTML"'
             f' hx-trigger="change">{opts}</select>'
