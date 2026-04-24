@@ -132,13 +132,15 @@
       <button class="btn-sm btn-sm-muted"
         hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
         hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
-        hx-swap="outerHTML">
+        hx-swap="outerHTML"
+        hx-on:htmx:after-request="location.reload()">
         Later
       </button>
       <button class="btn-sm btn-sm-muted"
         hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
         hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
-        hx-swap="outerHTML">
+        hx-swap="outerHTML"
+        hx-on:htmx:after-request="location.reload()">
         Dismiss
       </button>
     </div>
@@ -256,13 +258,15 @@
     <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
       hx-target="#watching-{{ encoded }}-{{ sub.pr_number }}"
-      hx-swap="outerHTML">
+      hx-swap="outerHTML"
+      hx-on:htmx:after-request="location.reload()">
       Later
     </button>
     <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
       hx-target="#watching-{{ encoded }}-{{ sub.pr_number }}"
-      hx-swap="outerHTML">
+      hx-swap="outerHTML"
+      hx-on:htmx:after-request="location.reload()">
       – Dismiss
     </button>
 
