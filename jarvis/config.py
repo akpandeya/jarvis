@@ -29,9 +29,14 @@ class JiraConfig(BaseModel):
     project_keys: list[str] = Field(default_factory=list)  # empty = use jira-cli default project
 
 
+class GCalAccountConfig(BaseModel):
+    name: str  # human label, e.g. "Work" or "Personal"
+    credentials_path: str  # path to OAuth client credentials JSON
+    calendar_ids: list[str] = Field(default_factory=lambda: ["primary"])
+
+
 class GCalConfig(BaseModel):
-    calendar_id: str = "primary"
-    credentials_path: str = ""  # path to OAuth credentials JSON
+    accounts: list[GCalAccountConfig] = Field(default_factory=list)
 
 
 class KafkaConfig(BaseModel):
@@ -98,9 +103,16 @@ project_keys = [
     # "TGH",  # leave empty to use jira-cli default project
 ]
 
-[gcal]
-calendar_id = "primary"
-credentials_path = ""
+# Google Calendar — add one [[gcal.accounts]] block per Google account
+# [[gcal.accounts]]
+# name = "Work"
+# credentials_path = "~/.jarvis/gcal_work_creds.json"
+# calendar_ids = ["primary"]   # or add specific calendar IDs
+#
+# [[gcal.accounts]]
+# name = "Personal"
+# credentials_path = "~/.jarvis/gcal_personal_creds.json"
+# calendar_ids = ["primary"]
 
 [kafka]
 enabled = true  # parses shell history for hfkcat/kcat commands
