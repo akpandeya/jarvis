@@ -6,7 +6,7 @@ import uuid as uuid_mod
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from jarvis.db import (
@@ -38,6 +38,11 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 @app.get("/", response_class=HTMLResponse)
+def home():
+    return RedirectResponse(url="/upcoming", status_code=302)
+
+
+@app.get("/timeline", response_class=HTMLResponse)
 def timeline(
     request: Request,
     source: str | None = Query(None),
@@ -72,6 +77,67 @@ def timeline(
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(request, "_events.html", ctx)
     return templates.TemplateResponse(request, "timeline.html", ctx)
+
+
+@app.get("/upcoming", response_class=HTMLResponse)
+def upcoming(request: Request):
+    import zoneinfo as _zi
+    from datetime import UTC, date
+    from datetime import datetime as dt
+    from datetime import time as dtime
+
+    conn = get_db()
+    try:
+        _tz = _zi.ZoneInfo("localtime")
+    except Exception:
+        _tz = UTC
+    _today = date.today()
+    today_start = dt.combine(_today, dtime.min, tzinfo=_tz).astimezone(UTC)
+    today_end = dt.combine(_today, dtime.max, tzinfo=_tz).astimezone(UTC)
+
+    rows = conn.execute(
+        """SELECT title, happened_at, url, body,
+                  json_extract(metadata,'$.location') as location,
+                  json_extract(metadata,'$.meet_link') as meet_link,
+                  json_extract(metadata,'$.attendee_count') as attendee_count,
+                  json_extract(metadata,'$.account') as account,
+                  json_extract(metadata,'$.status') as status
+           FROM events
+           WHERE source='gcal'
+             AND happened_at >= ? AND happened_at <= ?
+           ORDER BY happened_at ASC""",
+        (today_start.isoformat(), today_end.isoformat()),
+    ).fetchall()
+
+    meetings = []
+    for r in rows:
+        m = dict(r)
+        try:
+            ts = dt.fromisoformat(m["happened_at"])
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            m["time_local"] = ts.astimezone(_tz).strftime("%-I:%M %p")
+        except Exception:
+            m["time_local"] = (m["happened_at"] or "")[:16].replace("T", " ")
+        meetings.append(m)
+
+    active = _subscriptions_active(conn)
+    blockers = [
+        _add_badges(s)
+        for s in active
+        if s.get("ci_status") == "failed" or s.get("review_decision") == "CHANGES_REQUESTED"
+    ]
+
+    conn.close()
+    return templates.TemplateResponse(
+        request,
+        "upcoming.html",
+        {
+            "meetings": meetings,
+            "blockers": blockers,
+            "today": date.today(),
+        },
+    )
 
 
 @app.get("/search", response_class=HTMLResponse)
@@ -216,9 +282,10 @@ def sessions_page(
                   json_extract(metadata,'$.session_id') as session_id,
                   json_extract(metadata,'$.branch') as branch,
                   json_extract(metadata,'$.cwd') as cwd,
-                  json_extract(metadata,'$.turns') as turns
+                  json_extract(metadata,'$.turns') as turns,
+                  COALESCE(json_extract(metadata,'$.last_message_at'), happened_at) as last_active
            FROM events WHERE source='claude_sessions'
-           ORDER BY happened_at DESC LIMIT 50"""
+           ORDER BY last_active DESC LIMIT 50"""
     ).fetchall()
     conn.close()
 

@@ -43,6 +43,7 @@ def _parse_session(jsonl_path: Path, since: datetime) -> RawEvent | None:
     first_user_msg: str = ""
     first_assistant_msg: str = ""
     started_at: datetime | None = None
+    last_message_at: datetime | None = None
     slug: str = ""
     git_branch: str = ""
     cwd: str = ""
@@ -76,12 +77,20 @@ def _parse_session(jsonl_path: Path, since: datetime) -> RawEvent | None:
                             cwd = entry.get("cwd", "")
                             content = entry.get("message", {}).get("content", "")
                             first_user_msg = _first_text(content)
+                        last_message_at = ts
                     turn_count += 1
 
                 elif entry_type == "assistant" and not entry.get("isSidechain"):
                     if not first_assistant_msg:
                         content = entry.get("message", {}).get("content", "")
                         first_assistant_msg = _first_text(content)
+                    ts_str = entry.get("timestamp", "")
+                    if ts_str:
+                        try:
+                            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                            last_message_at = ts
+                        except ValueError:
+                            pass
                     turn_count += 1
 
     except OSError:
@@ -114,6 +123,7 @@ def _parse_session(jsonl_path: Path, since: datetime) -> RawEvent | None:
             "turns": turn_count,
             "branch": git_branch,
             "cwd": cwd,
+            "last_message_at": last_message_at.isoformat() if last_message_at else None,
         },
     )
 

@@ -107,6 +107,7 @@ class GCal:
                         maxResults=50,
                         singleEvents=True,
                         orderBy="startTime",
+                        fields="items(id,summary,description,start,end,location,htmlLink,attendees,organizer,recurringEventId,conferenceData,status)",
                     )
                     .execute()
                 )
@@ -123,6 +124,16 @@ class GCal:
                     happened_at = datetime.fromisoformat(start_str)
                 except ValueError:
                     happened_at = datetime.fromisoformat(start_str + "T00:00:00")
+
+                meet_link: str | None = None
+                for ep in item.get("conferenceData", {}).get("entryPoints", []):
+                    if ep.get("entryPointType") == "video":
+                        meet_link = ep.get("uri")
+                        break
+                if not meet_link:
+                    loc = item.get("location", "") or ""
+                    if "meet.google.com" in loc or "zoom.us" in loc or "teams.microsoft.com" in loc:
+                        meet_link = loc
 
                 attendees = item.get("attendees", [])
                 entities: list[tuple[str, str, str]] = []
@@ -147,6 +158,7 @@ class GCal:
                         project=None,
                         metadata={
                             "location": item.get("location"),
+                            "meet_link": meet_link,
                             "status": item.get("status"),
                             "attendee_count": len(attendees),
                             "recurring": bool(item.get("recurringEventId")),

@@ -41,6 +41,10 @@
         .filters select, .filters input { margin-bottom: 0; }
         .loading { text-align: center; padding: 2rem; color: var(--pico-muted-color); }
         .summary-content { line-height: 1.7; }
+        .account-badge { display:inline-block; padding:.1rem .45rem; border-radius:4px; font-size:.75em; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+        .account-work { background:#0e4a6e; color:#7dd3fc; }
+        .account-personal { background:#14532d; color:#86efac; }
+        .account-default { background:#3d3d3d; color:#d1d5db; }
     </style>
 </head>
 <body>
@@ -49,7 +53,8 @@
             <li><strong>Jarvis</strong></li>
         </ul>
         <ul>
-            <li><a href="/" {% if active == "timeline" %}class="active"{% endif %}>Timeline</a></li>
+            <li><a href="/upcoming" {% if active == "upcoming" %}class="active"{% endif %}>Upcoming</a></li>
+            <li><a href="/timeline" {% if active == "timeline" %}class="active"{% endif %}>Timeline</a></li>
             <li><a href="/search" {% if active == "search" %}class="active"{% endif %}>Search</a></li>
             <li><a href="/summary?kind=standup" {% if active == "summary" %}class="active"{% endif %}>Summary</a></li>
             <li><a href="/sessions" {% if active == "sessions" %}class="active"{% endif %}>Sessions</a></li>
