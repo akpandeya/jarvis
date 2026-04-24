@@ -17,7 +17,7 @@ from jarvis.integrations.thunderbird import Thunderbird
 
 
 def _make_gloda_db(path: Path) -> None:
-    """Create a minimal global-messages-db.sqlite matching the gloda schema."""
+    """Create a minimal global-messages-db.sqlite matching the modern gloda schema."""
     conn = sqlite3.connect(path)
     conn.executescript(
         """
@@ -29,11 +29,21 @@ def _make_gloda_db(path: Path) -> None:
             id INTEGER PRIMARY KEY,
             folderID INTEGER NOT NULL,
             messageKey INTEGER,
-            date REAL NOT NULL,
-            subject TEXT,
-            author TEXT,
-            recipients TEXT,
-            read INTEGER DEFAULT 0
+            conversationID INTEGER NOT NULL DEFAULT 0,
+            date INTEGER NOT NULL,
+            headerMessageID TEXT,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            jsonAttributes TEXT,
+            notability INTEGER NOT NULL DEFAULT 0
+        );
+        -- FTS table that holds subject/author/recipients in modern Thunderbird
+        CREATE TABLE messagesText_content (
+            docid INTEGER PRIMARY KEY,
+            c0body TEXT,
+            c1subject TEXT,
+            c2attachmentNames TEXT,
+            c3author TEXT,
+            c4recipients TEXT
         );
         """
     )
@@ -49,15 +59,24 @@ def _insert_message(
     author: str | None = "Alice <alice@example.com>",
     recipients: str | None = "Bob <bob@work.com>",
 ) -> None:
+    """Insert a message using microsecond timestamps (modern Thunderbird format)."""
     conn = sqlite3.connect(db)
     cur = conn.cursor()
     # Upsert folder
     cur.execute("INSERT OR IGNORE INTO folderLocations (folderURI) VALUES (?)", (folder_uri,))
     cur.execute("SELECT id FROM folderLocations WHERE folderURI = ?", (folder_uri,))
     folder_id = cur.fetchone()[0]
+    # date in microseconds
+    date_us = int(date_epoch * 1_000_000)
     cur.execute(
-        "INSERT INTO messages (folderID, date, subject, author, recipients) VALUES (?,?,?,?,?)",
-        (folder_id, date_epoch, subject, author, recipients),
+        "INSERT INTO messages (folderID, date, deleted) VALUES (?,?,0)",
+        (folder_id, date_us),
+    )
+    msg_id = cur.lastrowid
+    cur.execute(
+        "INSERT INTO messagesText_content"
+        " (docid, c1subject, c3author, c4recipients) VALUES (?,?,?,?)",
+        (msg_id, subject, author, recipients),
     )
     conn.commit()
     conn.close()

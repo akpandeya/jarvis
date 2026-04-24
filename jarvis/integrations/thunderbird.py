@@ -50,11 +50,11 @@ class Thunderbird:
         if db_path is None:
             return []
 
-        # Convert since to a Unix timestamp (seconds). Thunderbird stores date in seconds.
+        # Thunderbird stores date in microseconds since Unix epoch.
         if since.tzinfo is None:
-            since_ts = since.replace(tzinfo=UTC).timestamp()
+            since_us = int(since.replace(tzinfo=UTC).timestamp() * 1_000_000)
         else:
-            since_ts = since.timestamp()
+            since_us = int(since.timestamp() * 1_000_000)
 
         # Copy the DB to a temp file to avoid issues with a locked live database.
         try:
@@ -69,14 +69,18 @@ class Thunderbird:
             conn = sqlite3.connect(tmp_path)
             conn.row_factory = sqlite3.Row
             try:
+                # Modern Thunderbird (≥78) stores subject/author/recipients in
+                # the messagesText_content FTS table, not as columns on messages.
                 rows = conn.execute(
                     """
-                    SELECT m.date, m.subject, m.author, m.recipients, fl.folderURI
+                    SELECT m.date, mt.c1subject AS subject, mt.c3author AS author,
+                           mt.c4recipients AS recipients, fl.folderURI
                     FROM messages m
+                    JOIN messagesText_content mt ON mt.docid = m.id
                     JOIN folderLocations fl ON m.folderID = fl.id
-                    WHERE m.date >= ?
+                    WHERE m.date >= ? AND m.deleted = 0
                     """,
-                    (since_ts,),
+                    (since_us,),
                 ).fetchall()
             except sqlite3.DatabaseError:
                 return []
@@ -95,16 +99,19 @@ class Thunderbird:
             author: str = (row["author"] or "").strip()
             folder_uri: str = row["folderURI"] or ""
 
-            # F6: skip empty drafts (no subject and no body — body not in messages table,
-            # so we treat missing subject + missing author as a proxy for an empty draft)
+            # Skip empty drafts (no subject and no author)
             if not subject and not author:
+                continue
+
+            # Skip obvious spam folders
+            if any(x in folder_uri for x in ("Junk", "Spam", "Trash")):
                 continue
 
             kind = "email_sent" if "Sent" in folder_uri else "email_received"
             domain = _extract_domain(author)
 
-            # Build happened_at from the epoch seconds stored in Thunderbird
-            happened_at = datetime.fromtimestamp(row["date"], tz=UTC)
+            # date is stored in microseconds
+            happened_at = datetime.fromtimestamp(row["date"] / 1_000_000, tz=UTC)
 
             events.append(
                 RawEvent(
