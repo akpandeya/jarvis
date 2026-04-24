@@ -12,7 +12,7 @@
       hx-target="#discover-panel"
       hx-swap="innerHTML"
       hx-on:htmx:before-request="this.disabled=true;this.textContent='Searching…'"
-      hx-on:htmx:after-request="this.disabled=false;this.textContent='↻ Discover PRs'">
+      hx-on:htmx:after-request="this.disabled=false;this.textContent='↻ Discover PRs';setTimeout(()=>location.reload(),1500)">
       ↻ Discover PRs
     </button>
   </div>
@@ -41,9 +41,42 @@
   </button>
 </details>
 
+{% if subscriptions or filter_repo or filter_author %}
+{# Filter bar — only show when there's something to filter #}
+<form method="get" action="/prs" style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:end;margin-bottom:1rem">
+  <div>
+    <label style="font-size:.8em;display:block;margin-bottom:.25rem;color:var(--pico-muted-color)">Repo</label>
+    <select name="repo" style="font-size:.85rem;padding:.25rem .5rem;margin:0"
+            onchange="this.form.submit()">
+      <option value="">All repos</option>
+      {% for r in all_repos %}
+        <option value="{{ r }}"{% if filter_repo == r %} selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label style="font-size:.8em;display:block;margin-bottom:.25rem;color:var(--pico-muted-color)">Author</label>
+    <select name="author" style="font-size:.85rem;padding:.25rem .5rem;margin:0"
+            onchange="this.form.submit()">
+      <option value="">All authors</option>
+      {% for a in all_authors %}
+        <option value="{{ a }}"{% if filter_author == a %} selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  {% if filter_repo or filter_author %}
+  <a href="/prs" style="font-size:.8rem;align-self:flex-end;padding-bottom:.3rem">✕ Clear filters</a>
+  {% endif %}
+</form>
+{% endif %}
+
 {% if not subscriptions %}
 <aside style="border-left:3px solid var(--pico-muted-border-color);padding:.75rem 1rem;color:var(--pico-muted-color)">
-  No subscribed PRs yet. Click <strong>↻ Discover PRs</strong> to find open PRs you're involved in.
+  {% if filter_repo or filter_author %}
+    No PRs match the current filters.
+  {% else %}
+    No subscribed PRs yet. Click <strong>↻ Discover PRs</strong> to find open PRs you're involved in.
+  {% endif %}
 </aside>
 {% else %}
 <div id="pr-list">
@@ -67,9 +100,6 @@
       {{ sub.ci_badge | safe }}
       &nbsp;
       {{ sub.review_badge | safe }}
-      {% if sub.state in ('merged', 'closed') %}
-        <span style="font-size:.75em;color:var(--pico-muted-color)">({{ sub.state }})</span>
-      {% endif %}
     </div>
   </div>
 
@@ -87,6 +117,12 @@
       ↗ GitHub
     </a>
     <button style="font-size:.75rem;padding:.2rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
+      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
+      hx-target="closest article"
+      hx-swap="outerHTML">
+      – Dismiss
+    </button>
+    <button style="font-size:.75rem;padding:.2rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
       hx-delete="/api/prs/{{ encoded }}/{{ sub.pr_number }}"
       hx-target="closest article"
       hx-swap="outerHTML"
@@ -99,6 +135,44 @@
 </article>
 {% endfor %}
 </div>
+{% endif %}
+
+{% if dismissed %}
+<details style="margin-top:1.5rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.75rem 1rem">
+  <summary style="cursor:pointer;font-size:.9em;color:var(--pico-muted-color)">
+    Dismissed ({{ dismissed | length }})
+  </summary>
+  <div style="margin-top:.75rem">
+  {% for sub in dismissed %}
+  {% set encoded = sub.repo | replace("/", "--") %}
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--pico-muted-border-color);flex-wrap:wrap;gap:.5rem">
+    <div style="font-size:.85em">
+      <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+        #{{ sub.pr_number }} {{ sub.title or "(unknown title)" }}
+      </a>
+      <span style="color:var(--pico-muted-color);margin-left:.5rem">{{ sub.repo }}</span>
+      {% if sub.author %}<span style="color:var(--pico-muted-color)"> · {{ sub.author }}</span>{% endif %}
+    </div>
+    <div style="display:flex;gap:.4rem">
+      <button style="font-size:.75rem;padding:.15rem .5rem"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/undismiss"
+        hx-target="closest div[style*='margin-top']"
+        hx-swap="outerHTML"
+        hx-on:htmx:after-request="location.reload()">
+        ↩ Restore
+      </button>
+      <button style="font-size:.75rem;padding:.15rem .5rem;background:none;border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"
+        hx-delete="/api/prs/{{ encoded }}/{{ sub.pr_number }}"
+        hx-target="closest div[style*='display:flex']"
+        hx-swap="outerHTML"
+        hx-confirm="Remove this PR entirely?">
+        ✕
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+</details>
 {% endif %}
 
 {% endblock %}

@@ -1,0 +1,1 @@
+ALTER TABLE pr_subscriptions ADD COLUMN dismissed INTEGER NOT NULL DEFAULT 0;

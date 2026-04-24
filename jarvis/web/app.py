@@ -284,8 +284,17 @@ def _local_path_for_repo(repo: str) -> Path | None:
     return None
 
 
-def _subscriptions_all(conn) -> list[dict]:
-    rows = conn.execute("SELECT * FROM pr_subscriptions ORDER BY subscribed_at DESC").fetchall()
+def _subscriptions_active(conn) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE dismissed=0 AND state='open' ORDER BY subscribed_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _subscriptions_dismissed(conn) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE dismissed=1 ORDER BY subscribed_at DESC"
+    ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -339,14 +348,9 @@ def _review_badge(decision: str | None) -> str:
     return '<span style="color:var(--pico-muted-color)">Review pending</span>'
 
 
-@app.get("/prs", response_class=HTMLResponse)
-def prs_page(request: Request):
-    conn = get_db()
-    subscriptions = _subscriptions_all(conn)
-
-    # Fetch live status for each subscribed PR
+def _enrich_subscriptions(conn, subs: list[dict]) -> list[dict]:
     enriched = []
-    for sub in subscriptions:
+    for sub in subs:
         pr_data = _gh(
             "pr",
             "view",
@@ -357,7 +361,6 @@ def prs_page(request: Request):
         )
         if pr_data:
             sub["live"] = pr_data
-            # Auto-close if merged/closed
             if pr_data.get("state") in ("MERGED", "CLOSED"):
                 conn.execute(
                     "UPDATE pr_subscriptions SET state=? WHERE repo=? AND pr_number=?",
@@ -372,6 +375,28 @@ def prs_page(request: Request):
             sub["live"].get("reviewDecision") if sub["live"] else None
         )
         enriched.append(sub)
+    return enriched
+
+
+@app.get("/prs", response_class=HTMLResponse)
+def prs_page(
+    request: Request,
+    repo: str | None = Query(None),
+    author: str | None = Query(None),
+):
+    conn = get_db()
+    active = _enrich_subscriptions(conn, _subscriptions_active(conn))
+    dismissed = _subscriptions_dismissed(conn)  # no live fetch for dismissed
+
+    # Build filter option lists from all active subs
+    all_repos = sorted({s["repo"] for s in active})
+    all_authors = sorted({s["author"] for s in active if s.get("author")})
+
+    # Apply filters
+    if repo:
+        active = [s for s in active if s["repo"] == repo]
+    if author:
+        active = [s for s in active if s.get("author") == author]
 
     from jarvis.db import kv_get
 
@@ -383,9 +408,14 @@ def prs_page(request: Request):
         request,
         "prs.html",
         {
-            "subscriptions": enriched,
+            "subscriptions": active,
+            "dismissed": dismissed,
             "last_checked": last_checked,
             "ide_name": ide[0] if ide else None,
+            "all_repos": all_repos,
+            "all_authors": all_authors,
+            "filter_repo": repo or "",
+            "filter_author": author or "",
         },
     )
 
@@ -559,37 +589,17 @@ def api_prs_discover():
     if not prs:
         return HTMLResponse('<p style="color:var(--pico-muted-color)">No open PRs found.</p>')
 
-    rows = ""
+    # Auto-subscribe all discovered PRs (dismissed ones stay dismissed; page reload shows them)
+    conn2 = get_db()
     for pr in prs:
-        repo = pr.get("repo", "")
-        num = pr.get("number", "")
-        title = pr.get("title", "")
-        url = pr.get("url", "#")
-        author = pr.get("author", {})
-        author_login = author.get("login", "") if isinstance(author, dict) else ""
-        rows += (
-            f"<tr>"
-            f'<td><a href="{url}" target="_blank">#{num}</a></td>'
-            f"<td>{title}</td>"
-            f'<td style="font-size:.8em">{repo}</td>'
-            f'<td style="font-size:.8em">{author_login}</td>'
-            f"<td>"
-            f'<button style="font-size:.75rem;padding:.2rem .6rem" '
-            f'hx-post="/api/prs/subscribe" '
-            f'hx-vals=\'{{"repo":"{repo}","pr_number":{num}}}\' '
-            f'hx-target="#discover-results" hx-swap="outerHTML" '
-            f'hx-on:htmx:after-request="location.reload()">'
-            f"+ Subscribe</button>"
-            f"</td>"
-            f"</tr>"
-        )
+        _subscription_upsert(conn2, pr["repo"], pr["number"], pr)
+    conn2.close()
 
+    new_count = len(prs)
     return HTMLResponse(
-        f'<div id="discover-results">'
-        f"<table><thead><tr><th>#</th><th>Title</th><th>Repo</th>"
-        f"<th>Author</th><th></th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
-        f"</div>"
+        f'<p style="color:#4ade80;font-size:.85em">'
+        f"✓ {new_count} open PR{'s' if new_count != 1 else ''} synced — "
+        f'<a href="/prs" style="color:#4ade80">refresh page</a> to see them.</p>'
     )
 
 
@@ -617,6 +627,32 @@ def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
     repo = _repo_decode(repo_encoded)
     conn = get_db()
     _subscription_delete(conn, repo, pr_number)
+    conn.close()
+    return HTMLResponse("")
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/dismiss")
+def api_prs_dismiss(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    conn.execute(
+        "UPDATE pr_subscriptions SET dismissed=1 WHERE repo=? AND pr_number=?",
+        (repo, pr_number),
+    )
+    conn.commit()
+    conn.close()
+    return HTMLResponse("")
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/undismiss")
+def api_prs_undismiss(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    conn.execute(
+        "UPDATE pr_subscriptions SET dismissed=0, state='open' WHERE repo=? AND pr_number=?",
+        (repo, pr_number),
+    )
+    conn.commit()
     conn.close()
     return HTMLResponse("")
 
