@@ -395,7 +395,29 @@ def _firefox_installed() -> bool:
     return Path("/Applications/Firefox.app").exists()
 
 
-def _firefox_profiles() -> list[str]:
+def _firefox_profiles() -> list[dict]:
+    """Return list of {name, path} dicts from Firefox Profile Groups SQLite.
+
+    Firefox stores user-visible profile names ("Work", "Personal") in a SQLite
+    database under Profile Groups, not in profiles.ini. Falls back to profiles.ini
+    Name= values if the SQLite is unavailable.
+    """
+    import sqlite3
+
+    profile_groups_dir = Path.home() / "Library/Application Support/Firefox/Profile Groups"
+    if profile_groups_dir.exists():
+        for sqlite_path in profile_groups_dir.glob("*.sqlite"):
+            try:
+                pconn = sqlite3.connect(str(sqlite_path))
+                pconn.row_factory = sqlite3.Row
+                rows = pconn.execute("SELECT name, path FROM Profiles ORDER BY id").fetchall()
+                pconn.close()
+                if rows:
+                    return [{"name": r["name"], "path": r["path"]} for r in rows]
+            except Exception:
+                pass
+
+    # Fallback: read profiles.ini
     import configparser
 
     ini = Path.home() / "Library/Application Support/Firefox/profiles.ini"
@@ -403,7 +425,11 @@ def _firefox_profiles() -> list[str]:
         return []
     cfg = configparser.ConfigParser()
     cfg.read(str(ini))
-    return [cfg[s]["Name"] for s in cfg.sections() if s.startswith("Profile") and "Name" in cfg[s]]
+    return [
+        {"name": cfg[s]["Name"], "path": cfg[s].get("Path", "")}
+        for s in cfg.sections()
+        if s.startswith("Profile") and "Name" in cfg[s]
+    ]
 
 
 def _profile_for_account(conn, account: str) -> str | None:
@@ -428,8 +454,8 @@ def _browser_profile_fragment(conn) -> str:
         current = kv_get(conn, f"browser_profile:{acct}") or ""
         opts = '<option value="">— default browser —</option>'
         for p in profiles:
-            sel = " selected" if p == current else ""
-            opts += f'<option value="{p}"{sel}>{p}</option>'
+            sel = " selected" if p["path"] == current else ""
+            opts += f'<option value="{p["path"]}"{sel}>{p["name"]}</option>'
         rows += (
             f'<div style="display:flex;align-items:center;gap:.75rem;padding:.3rem 0;'
             f'border-bottom:1px solid var(--pico-muted-border-color)">'
@@ -831,10 +857,14 @@ def api_open_url(url: str = Form(...), gh_account: str = Form("")):
     import subprocess
 
     conn = get_db()
-    profile = _profile_for_account(conn, gh_account or None)
+    profile_path = _profile_for_account(conn, gh_account or None)
     conn.close()
-    if _firefox_installed() and profile:
-        subprocess.Popen(["open", "-na", "Firefox", "--args", "-P", profile, url])
+    if _firefox_installed() and profile_path:
+        # Resolve relative path (e.g. "Profiles/d55fx6mi.default-release") to absolute
+        base = Path.home() / "Library/Application Support/Firefox"
+        abs_profile = base / profile_path
+        firefox_bin = "/Applications/Firefox.app/Contents/MacOS/firefox"
+        subprocess.Popen([firefox_bin, "--profile", str(abs_profile), "--new-window", url])
     else:
         subprocess.Popen(["open", url])
     return HTMLResponse("")
