@@ -420,6 +420,49 @@ def set_repo_path_enabled(conn: sqlite3.Connection, path_id: str, enabled: bool)
     conn.commit()
 
 
+def subscriptions_watching(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pr_subscriptions"
+        " WHERE watch_state='watching' AND state='open'"
+        " ORDER BY subscribed_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def subscriptions_pending(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pr_subscriptions"
+        " WHERE watch_state='pending' AND state='open'"
+        " ORDER BY subscribed_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def subscriptions_dismissed(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE watch_state='dismissed' ORDER BY subscribed_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_pr_watch_state(conn: sqlite3.Connection, repo: str, pr_number: int, state: str) -> None:
+    conn.execute(
+        "UPDATE pr_subscriptions SET watch_state=? WHERE repo=? AND pr_number=?",
+        (state, repo, pr_number),
+    )
+    conn.commit()
+
+
+def set_pr_chat_session(
+    conn: sqlite3.Connection, repo: str, pr_number: int, session_id: str
+) -> None:
+    conn.execute(
+        "UPDATE pr_subscriptions SET chat_session_id=? WHERE repo=? AND pr_number=?",
+        (session_id, repo, pr_number),
+    )
+    conn.commit()
+
+
 def update_pr_cache(
     conn: sqlite3.Connection,
     repo: str,

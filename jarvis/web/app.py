@@ -18,8 +18,13 @@ from jarvis.db import (
     list_sessions,
     query_events,
     search_events,
+    set_pr_chat_session,
+    set_pr_watch_state,
     set_repo_path_account,
     set_repo_path_enabled,
+    subscriptions_dismissed,
+    subscriptions_pending,
+    subscriptions_watching,
     update_pr_cache,
 )
 from jarvis.patterns import (
@@ -475,28 +480,24 @@ def _local_path_for_repo(repo: str) -> Path | None:
 
 
 def _subscriptions_active(conn) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM pr_subscriptions WHERE dismissed=0 AND state='open' ORDER BY subscribed_at DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
+    return subscriptions_watching(conn)
 
 
-def _subscriptions_dismissed(conn) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM pr_subscriptions WHERE dismissed=1 ORDER BY subscribed_at DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def _subscription_upsert(conn, repo: str, pr_number: int, data: dict) -> None:
+def _subscription_upsert(
+    conn, repo: str, pr_number: int, data: dict, gh_username: str | None = None
+) -> None:
     from datetime import UTC, datetime
 
     from ulid import ULID
 
+    author_login = (
+        data.get("author", {}).get("login") if isinstance(data.get("author"), dict) else None
+    )
+    watch_state = "watching" if (gh_username and author_login == gh_username) else "pending"
     conn.execute(
         """INSERT INTO pr_subscriptions
-               (id, repo, pr_number, title, author, branch, pr_url, state, subscribed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)
+               (id, repo, pr_number, title, author, branch, pr_url, state, subscribed_at, watch_state)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
            ON CONFLICT(repo, pr_number) DO UPDATE SET
                title=excluded.title, author=excluded.author,
                branch=excluded.branch, pr_url=excluded.pr_url""",
@@ -505,10 +506,11 @@ def _subscription_upsert(conn, repo: str, pr_number: int, data: dict) -> None:
             repo,
             pr_number,
             data.get("title"),
-            data.get("author", {}).get("login") if isinstance(data.get("author"), dict) else None,
+            author_login,
             data.get("headRefName"),
             data.get("url"),
             datetime.now(UTC).isoformat(),
+            watch_state,
         ),
     )
     conn.commit()
@@ -679,14 +681,17 @@ def prs_page(
     repo: str | None = Query(None),
     author: str | None = Query(None),
 ):
-    conn = get_db()
-    active = [_add_badges(s) for s in _subscriptions_active(conn)]
-    dismissed = _subscriptions_dismissed(conn)
+    from jarvis.config import JarvisConfig
+    from jarvis.db import kv_get
 
-    # Attach gh_account to each sub so the template can pass it to /api/open-url
-    # Build exact repo→account map from configured local paths
+    conn = get_db()
+    watching = [_add_badges(s) for s in subscriptions_watching(conn)]
+    pending = subscriptions_pending(conn)
+    dismissed = subscriptions_dismissed(conn)
+
+    # Attach gh_account to watching subs for open-url
     repo_account_map: dict[str, str] = {}
-    owner_account_map: dict[str, str] = {}  # fallback: owner prefix → account
+    owner_account_map: dict[str, str] = {}
     for r in list_repo_paths(conn):
         if not r.get("gh_account"):
             continue
@@ -695,27 +700,34 @@ def prs_page(
             repo_account_map[full_repo] = r["gh_account"]
             owner = full_repo.split("/")[0]
             owner_account_map.setdefault(owner, r["gh_account"])
-    for sub in active:
+
+    def _attach_account(sub: dict) -> dict:
         sub_repo = sub["repo"]
         account = repo_account_map.get(sub_repo)
         if not account:
             owner = sub_repo.split("/")[0] if "/" in sub_repo else sub_repo
             account = owner_account_map.get(owner, "")
         sub["gh_account"] = account
+        return sub
 
-    # Build filter option lists from all active subs
-    all_repos = sorted({s["repo"] for s in active})
-    all_authors = sorted({s["author"] for s in active if s.get("author")})
+    watching = [_attach_account(s) for s in watching]
+    pending = [_attach_account(s) for s in pending]
 
-    # Apply filters
+    # Build filter option lists from watching subs
+    all_repos = sorted({s["repo"] for s in watching})
+    all_authors = sorted({s["author"] for s in watching if s.get("author")})
+
+    # Apply filters to watching only
     if repo:
-        active = [s for s in active if s["repo"] == repo]
+        watching = [s for s in watching if s["repo"] == repo]
     if author:
-        active = [s for s in active if s.get("author") == author]
-
-    from jarvis.db import kv_get
+        watching = [s for s in watching if s.get("author") == author]
 
     last_checked = kv_get(conn, "last_pr_check_at") or "Never"
+    try:
+        review_model = JarvisConfig.load().pr_monitor.review_model
+    except Exception:
+        review_model = "claude-opus-4-7"
     conn.close()
 
     ide = _detect_ide()
@@ -723,7 +735,8 @@ def prs_page(
         request,
         "prs.html",
         {
-            "subscriptions": active,
+            "watching": watching,
+            "pending": pending,
             "dismissed": dismissed,
             "last_checked": last_checked,
             "ide_name": ide[0] if ide else None,
@@ -731,6 +744,7 @@ def prs_page(
             "all_authors": all_authors,
             "filter_repo": repo or "",
             "filter_author": author or "",
+            "review_model": review_model,
         },
     )
 
@@ -906,10 +920,22 @@ def api_prs_discover():
     if not prs:
         return HTMLResponse('<p style="color:var(--pico-muted-color)">No open PRs found.</p>')
 
-    # Auto-subscribe all discovered PRs and write CI/review cache
+    # Upsert all discovered PRs; author's own PRs → watching, others → pending
+    gh_accounts_set = set(_gh_accounts())
     conn2 = get_db()
     for pr in prs:
-        _subscription_upsert(conn2, pr["repo"], pr["number"], pr)
+        author_login = (
+            pr.get("author", {}).get("login") if isinstance(pr.get("author"), dict) else None
+        )
+        # Match against whichever gh account owns this repo
+        gh_username = None
+        pr_repo = pr["repo"]
+        owner = pr_repo.split("/")[0] if "/" in pr_repo else ""
+        for acct in gh_accounts_set:
+            if acct == author_login or acct == owner:
+                gh_username = acct
+                break
+        _subscription_upsert(conn2, pr["repo"], pr["number"], pr, gh_username=gh_username)
         ci = _parse_ci_status(pr)
         rd = pr.get("reviewDecision") or ""
         update_pr_cache(conn2, pr["repo"], pr["number"], ci, rd)
@@ -951,29 +977,172 @@ def api_prs_unsubscribe(repo_encoded: str, pr_number: int):
     return HTMLResponse("")
 
 
+@app.post("/api/prs/{repo_encoded}/{pr_number}/watch")
+def api_prs_watch(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "watching")
+    conn.close()
+    return HTMLResponse("")
+
+
 @app.post("/api/prs/{repo_encoded}/{pr_number}/dismiss")
 def api_prs_dismiss(repo_encoded: str, pr_number: int):
     repo = _repo_decode(repo_encoded)
     conn = get_db()
-    conn.execute(
-        "UPDATE pr_subscriptions SET dismissed=1 WHERE repo=? AND pr_number=?",
-        (repo, pr_number),
-    )
-    conn.commit()
+    set_pr_watch_state(conn, repo, pr_number, "dismissed")
+    conn.close()
+    return HTMLResponse("")
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/restore")
+def api_prs_restore(repo_encoded: str, pr_number: int):
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    set_pr_watch_state(conn, repo, pr_number, "pending")
     conn.close()
     return HTMLResponse("")
 
 
 @app.post("/api/prs/{repo_encoded}/{pr_number}/undismiss")
 def api_prs_undismiss(repo_encoded: str, pr_number: int):
+    """Legacy alias — restores to pending."""
     repo = _repo_decode(repo_encoded)
     conn = get_db()
-    conn.execute(
-        "UPDATE pr_subscriptions SET dismissed=0, state='open' WHERE repo=? AND pr_number=?",
-        (repo, pr_number),
-    )
-    conn.commit()
+    set_pr_watch_state(conn, repo, pr_number, "pending")
     conn.close()
+    return HTMLResponse("")
+
+
+@app.post("/api/prs/{repo_encoded}/{pr_number}/review", response_class=HTMLResponse)
+def api_prs_review(
+    repo_encoded: str,
+    pr_number: int,
+    model: str = Form(""),
+):
+    """Start or resume a Claude review chat for a watched PR. Returns redirect to /chat."""
+    import os
+
+    from fastapi.responses import RedirectResponse
+
+    from jarvis.config import JarvisConfig
+
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE repo=? AND pr_number=?", (repo, pr_number)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return HTMLResponse("PR not found", status_code=404)
+    sub = dict(row)
+
+    try:
+        cfg_model = JarvisConfig.load().pr_monitor.review_model
+    except Exception:
+        cfg_model = "claude-opus-4-7"
+    chosen_model = model or cfg_model
+
+    existing_session = sub.get("chat_session_id")
+
+    if not existing_session:
+        # Fetch full context for first review
+        token = _token_for_repo(conn, repo)
+        env = {**os.environ, "GH_TOKEN": token} if token else None
+        pr_info = (
+            _gh(
+                "pr",
+                "view",
+                str(pr_number),
+                "--json",
+                "title,body,author,reviews,reviewDecision,statusCheckRollup",
+                repo=repo,
+                env=env,
+            )
+            or {}
+        )
+        diff_result = subprocess.run(
+            ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env or os.environ,
+        )
+        diff_text = (
+            diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
+        )
+
+        prompt_parts = [
+            f"Please review this pull request:\n\n**{pr_info.get('title', sub.get('title', ''))}**",
+            f"Repo: {repo} | PR #{pr_number}",
+        ]
+        if pr_info.get("body"):
+            prompt_parts.append(f"\n**Description:**\n{pr_info['body']}")
+        ci = sub.get("ci_status") or "unknown"
+        rd = sub.get("review_decision") or "pending"
+        prompt_parts.append(f"\n**CI:** {ci} | **Reviews:** {rd}")
+        prompt_parts.append(f"\n**Diff:**\n```diff\n{diff_text}\n```")
+        prompt_parts.append(
+            "\nPlease give a thorough code review: correctness, potential bugs, design, test coverage, and any suggestions."
+        )
+        prompt = "\n".join(prompt_parts)
+
+        new_session_id = str(uuid_mod.uuid4())
+        set_pr_chat_session(conn, repo, pr_number, new_session_id)
+        conn.close()
+
+        # Kick off the session synchronously by calling claude with the prompt
+        cmd = [
+            "claude",
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--bare",
+            "--tools",
+            "",
+            "--model",
+            chosen_model,
+            "--session-id",
+            new_session_id,
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env or os.environ,
+        )
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        proc.wait()
+
+        return RedirectResponse(url=f"/chat?session={new_session_id}", status_code=303)
+    else:
+        conn.close()
+        return RedirectResponse(url=f"/chat?session={existing_session}", status_code=303)
+
+
+@app.get("/api/prs/pending-count")
+def api_prs_pending_count():
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM pr_subscriptions WHERE watch_state='pending' AND state='open'"
+    ).fetchone()[0]
+    conn.close()
+    return {"count": count}
+
+
+@app.get("/api/prs/pending-count-badge", response_class=HTMLResponse)
+def api_prs_pending_count_badge():
+    conn = get_db()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM pr_subscriptions WHERE watch_state='pending' AND state='open'"
+    ).fetchone()[0]
+    conn.close()
+    if count:
+        return HTMLResponse(f'<span class="nav-pending-badge">{count}</span>')
     return HTMLResponse("")
 
 
