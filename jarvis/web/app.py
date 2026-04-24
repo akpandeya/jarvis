@@ -17,6 +17,7 @@ from jarvis.db import (
     list_sessions,
     query_events,
     search_events,
+    set_repo_path_account,
 )
 from jarvis.patterns import (
     collaboration_frequency,
@@ -240,13 +241,13 @@ def _detect_ide() -> tuple[str, str] | None:
     return None
 
 
-def _gh(*args: str, repo: str | None = None) -> dict | list | None:
+def _gh(*args: str, repo: str | None = None, env: dict | None = None) -> dict | list | None:
     """Run a gh command and return parsed JSON, or None on failure."""
     cmd = ["gh", *args]
     if repo:
         cmd += ["--repo", repo]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env=env)
         if result.returncode != 0:
             return None
         return json.loads(result.stdout)
@@ -406,6 +407,40 @@ def _gh_accounts() -> list[str]:
         return []
 
 
+def _gh_token(account: str) -> str | None:
+    """Return the auth token for a specific gh account."""
+    try:
+        r = subprocess.run(
+            ["gh", "auth", "token", "--user", account],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return r.stdout.strip() or None
+    except Exception:
+        return None
+
+
+def _detect_account_for_repo(repo: str) -> str | None:
+    """Return the first gh account that can access the repo, or None."""
+    import os
+
+    for account in _gh_accounts():
+        token = _gh_token(account)
+        if not token:
+            continue
+        r = subprocess.run(
+            ["gh", "repo", "view", repo, "--json", "name"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            env={**os.environ, "GH_TOKEN": token},
+        )
+        if r.returncode == 0:
+            return account
+    return None
+
+
 def _remote_for_local_repo(path: str) -> str | None:
     """Extract owner/repo from a local git repo's remote URL."""
     try:
@@ -438,15 +473,15 @@ def _repos_from_local_paths(config) -> list[str]:
     return repos
 
 
-def _repos_from_db(conn) -> list[str]:
-    """Return GitHub owner/repo strings inferred from DB repo_paths table."""
-    repos = []
+def _repos_from_db(conn) -> list[tuple[str, str | None]]:
+    """Return (owner/repo, gh_account) pairs inferred from DB repo_paths table."""
+    result = []
     for row in list_repo_paths(conn):
         path = str(Path(row["path"]).expanduser())
         repo = _remote_for_local_repo(path)
-        if repo and repo not in repos:
-            repos.append(repo)
-    return repos
+        if repo and not any(r == repo for r, _ in result):
+            result.append((repo, row["gh_account"]))
+    return result
 
 
 @app.post("/api/prs/discover")
@@ -459,18 +494,22 @@ def api_prs_discover():
     prs: list[dict] = []
     seen: set[str] = set()
 
-    # Build full repo list: explicit config + DB paths + config git_local paths
-    all_repos = list(config.github.repos or [])
-    for r in _repos_from_db(conn):
-        if r not in all_repos:
-            all_repos.append(r)
+    import os
+
+    # Build (repo, gh_account) pairs: explicit config + DB paths + config git_local paths
+    repo_accounts: list[tuple[str, str | None]] = [(r, None) for r in config.github.repos or []]
+    for repo, acct in _repos_from_db(conn):
+        if not any(r == repo for r, _ in repo_accounts):
+            repo_accounts.append((repo, acct))
     conn.close()
     for r in _repos_from_local_paths(config):
-        if r not in all_repos:
-            all_repos.append(r)
+        if not any(repo == r for repo, _ in repo_accounts):
+            repo_accounts.append((r, None))
 
-    # List open PRs in every known repo
-    for repo in all_repos:
+    # List open PRs in every known repo, using the correct gh account token
+    for repo, acct in repo_accounts:
+        token = _gh_token(acct) if acct else None
+        env = {**os.environ, "GH_TOKEN": token} if token else None
         data = _gh(
             "pr",
             "list",
@@ -479,6 +518,7 @@ def api_prs_discover():
             "--state",
             "open",
             repo=repo,
+            env=env,
         )
         if isinstance(data, list):
             for pr in data:
@@ -489,6 +529,8 @@ def api_prs_discover():
 
     # Search by involvement across ALL authenticated gh accounts
     for account in _gh_accounts():
+        token = _gh_token(account)
+        env = {**os.environ, "GH_TOKEN": token} if token else None
         result = subprocess.run(
             [
                 "gh",
@@ -504,6 +546,7 @@ def api_prs_discover():
             capture_output=True,
             text=True,
             timeout=20,
+            env=env,
         )
         if result.returncode == 0:
             for pr in json.loads(result.stdout or "[]"):
@@ -794,19 +837,38 @@ def _repo_paths_fragment(conn) -> str:
     rows = list_repo_paths(conn)
     if not rows:
         return '<p style="font-size:.85em;color:var(--pico-muted-color);margin:.5rem 0">No paths added yet.</p>'
+    accounts = _gh_accounts()
     items = ""
     for row in rows:
         path = row["path"]
         repo = _remote_for_local_repo(str(Path(path).expanduser()))
-        label = (
-            f"→ {repo}"
-            if repo
-            else '<span style="color:var(--pico-muted-color)">(not a GitHub repo)</span>'
-        )
+        current_acct = row["gh_account"] or ""
+        if repo:
+            repo_label = f'<span style="color:var(--pico-muted-color)">→ {repo}</span>'
+            opts = "".join(
+                f'<option value="{a}"{" selected" if a == current_acct else ""}>{a}</option>'
+                for a in accounts
+            )
+            acct_select = (
+                f'<select style="font-size:.75rem;padding:.1rem .3rem;margin:0 .4rem;'
+                f"border:1px solid var(--pico-muted-border-color);background:transparent;"
+                f'color:var(--pico-muted-color);border-radius:4px"'
+                f' name="gh_account"'
+                f' hx-post="/api/settings/repo-paths/{row["id"]}/account"'
+                f' hx-target="#repo-paths-list" hx-swap="innerHTML"'
+                f' hx-trigger="change">{opts}</select>'
+                if accounts
+                else f'<span style="font-size:.75rem;color:var(--pico-muted-color);margin:0 .4rem">'
+                f"[{current_acct or 'no account'}]</span>"
+            )
+        else:
+            repo_label = '<span style="color:var(--pico-muted-color)">(not a GitHub repo)</span>'
+            acct_select = ""
         items += (
             f'<div style="display:flex;justify-content:space-between;align-items:center;'
             f'padding:.3rem 0;border-bottom:1px solid var(--pico-muted-border-color)">'
-            f'<span style="font-size:.85em"><code>{path}</code> <span style="color:var(--pico-muted-color)">{label}</span></span>'
+            f'<span style="font-size:.85em;display:flex;align-items:center;gap:.25rem;flex-wrap:wrap">'
+            f"<code>{path}</code> {repo_label}{acct_select}</span>"
             f'<button style="font-size:.75rem;padding:.15rem .5rem;background:none;'
             f'border:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color)"'
             f' hx-delete="/api/settings/repo-paths/{row["id"]}"'
@@ -826,8 +888,14 @@ def settings_repo_paths_get():
 
 @app.post("/api/settings/repo-paths", response_class=HTMLResponse)
 def settings_repo_paths_add(path: str = Form(...)):
+    p = path.strip()
     conn = get_db()
-    add_repo_path(conn, path.strip())
+    row_id = add_repo_path(conn, p)
+    repo = _remote_for_local_repo(str(Path(p).expanduser()))
+    if repo:
+        account = _detect_account_for_repo(repo)
+        if account:
+            set_repo_path_account(conn, row_id, account)
     html = _repo_paths_fragment(conn)
     conn.close()
     return HTMLResponse(html)
@@ -873,7 +941,12 @@ def settings_repo_paths_browse():
 
     conn = get_db()
     for p in candidates:
-        add_repo_path(conn, p)
+        row_id = add_repo_path(conn, p)
+        repo = _remote_for_local_repo(p)
+        if repo:
+            account = _detect_account_for_repo(repo)
+            if account:
+                set_repo_path_account(conn, row_id, account)
     html = _repo_paths_fragment(conn)
     conn.close()
     return HTMLResponse(html)
@@ -883,6 +956,15 @@ def settings_repo_paths_browse():
 def settings_repo_paths_delete(path_id: str):
     conn = get_db()
     delete_repo_path(conn, path_id)
+    html = _repo_paths_fragment(conn)
+    conn.close()
+    return HTMLResponse(html)
+
+
+@app.post("/api/settings/repo-paths/{path_id}/account", response_class=HTMLResponse)
+def settings_repo_paths_set_account(path_id: str, gh_account: str = Form(...)):
+    conn = get_db()
+    set_repo_path_account(conn, path_id, gh_account or None)
     html = _repo_paths_fragment(conn)
     conn.close()
     return HTMLResponse(html)
