@@ -817,6 +817,118 @@ def pr_refresh_watching(
     console.print(f"[green]✓ Refreshed[/green] {refreshed} PR(s).")
 
 
+# --- Jira board subscriptions ---
+
+jira_app = typer.Typer(help="Subscribe to Jira boards for active-sprint ingestion.")
+app.add_typer(jira_app, name="jira")
+
+_BOARD_URL_RE = r"https?://([^/]+)/jira/software/c/projects/([A-Z0-9]+)/boards/(\d+)"
+
+
+@jira_app.command("watch-board")
+def jira_watch_board(
+    url: str = typer.Argument(..., help="Full Jira board URL."),
+    nickname: str | None = typer.Option(
+        None,
+        "--nickname",
+        help="Override the nickname used in briefings. Defaults to the Jira board name.",
+    ),
+) -> None:
+    """Watch a Jira board's active sprint on every ingest."""
+    import re
+    import subprocess
+
+    from jarvis.db import add_jira_board_sub
+
+    m = re.match(_BOARD_URL_RE, url)
+    if not m:
+        console.print(
+            "[red]Could not parse board URL.[/red] Expected shape:\n"
+            "  https://<host>/jira/software/c/projects/<PROJECT>/boards/<ID>"
+        )
+        raise typer.Exit(1)
+    host, project_key, board_id_str = m.groups()
+    board_id = int(board_id_str)
+
+    final_nickname = nickname
+    if not final_nickname:
+        # Try to auto-resolve via `jira board list`. jira-cli has no --plain
+        # flag for this command but falls back to tab-separated output when
+        # stdout isn't a TTY.
+        try:
+            r = subprocess.run(
+                ["jira", "board", "list", "--project", project_key],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                stdin=subprocess.DEVNULL,
+            )
+            if r.returncode == 0:
+                for line in r.stdout.strip().splitlines():
+                    parts = [p.strip() for p in line.split("\t") if p.strip()]
+                    # Skip header row and empty lines.
+                    if len(parts) >= 2 and parts[0] == str(board_id):
+                        final_nickname = parts[1]
+                        break
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+    if not final_nickname:
+        final_nickname = f"{project_key} #{board_id}"
+
+    conn = get_db()
+    add_jira_board_sub(conn, host, project_key, board_id, final_nickname)
+    conn.close()
+    console.print(
+        f"[green]✓ Watching[/green] [bold]{final_nickname}[/bold] "
+        f"({project_key} #{board_id}) on {host}"
+    )
+
+
+@jira_app.command("boards")
+def jira_boards_list() -> None:
+    """List all Jira board subscriptions."""
+    from jarvis.db import list_jira_board_subs
+
+    conn = get_db()
+    subs = list_jira_board_subs(conn)
+    conn.close()
+    if not subs:
+        console.print("[yellow]No board subscriptions.[/yellow]")
+        console.print("Add one with: [bold]jarvis jira watch-board <url>[/bold]")
+        return
+    table = Table(title=f"Jira board subscriptions ({len(subs)})")
+    table.add_column("Nickname", style="bold")
+    table.add_column("Project")
+    table.add_column("Board ID", justify="right")
+    table.add_column("Host")
+    table.add_column("Added")
+    for sub in subs:
+        table.add_row(
+            sub["nickname"],
+            sub["project_key"],
+            str(sub["board_id"]),
+            sub["host"],
+            sub["added_at"][:16],
+        )
+    console.print(table)
+
+
+@jira_app.command("unwatch")
+def jira_unwatch(
+    board_id: int = typer.Argument(..., help="The Jira board ID to stop watching."),
+) -> None:
+    """Remove a Jira board subscription."""
+    from jarvis.db import delete_jira_board_sub
+
+    conn = get_db()
+    n = delete_jira_board_sub(conn, board_id)
+    conn.close()
+    if n == 0:
+        console.print(f"[yellow]No subscription found for board #{board_id}.[/yellow]")
+    else:
+        console.print(f"[green]✓ Unwatched[/green] board #{board_id}")
+
+
 # --- Schedule subcommands ---
 
 schedule_app = typer.Typer(help="Manage automatic ingestion schedule")

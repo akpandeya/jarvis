@@ -16,6 +16,7 @@ from jarvis.integrations.gcal import GCal
 from jarvis.integrations.git_local import GitLocal
 from jarvis.integrations.github import GitHub
 from jarvis.integrations.jira import Jira
+from jarvis.integrations.jira_boards import JiraBoards
 from jarvis.integrations.kafka import Kafka
 from jarvis.integrations.thunderbird import Thunderbird
 
@@ -34,8 +35,19 @@ def _store_event(conn: sqlite3.Connection, raw: RawEvent) -> None:
         url=raw.url,
         project=raw.project,
     )
-    for entity_kind, entity_name, role in raw.entities:
-        entity_id = upsert_entity(conn, kind=entity_kind, name=entity_name)
+    for ent in raw.entities:
+        if len(ent) == 4:
+            entity_kind, entity_name, role, ent_metadata = ent
+            entity_id = upsert_entity(
+                conn,
+                kind=entity_kind,
+                name=entity_name,
+                metadata=ent_metadata,
+                merge_metadata=True,
+            )
+        else:
+            entity_kind, entity_name, role = ent
+            entity_id = upsert_entity(conn, kind=entity_kind, name=entity_name)
         link_event_entity(conn, event_id, entity_id, role)
 
 
@@ -66,6 +78,9 @@ def ingest_all(
 
     if config.jira.enabled and source_filter in (None, "jira"):
         integrations.append(Jira(project_keys=config.jira.project_keys or None))
+        # Run after the vanilla Jira integration so board tags merge into
+        # entities already tagged as "recent".
+        integrations.append(JiraBoards())
 
     if source_filter in (None, "gcal"):
         for acct in config.gcal.accounts:

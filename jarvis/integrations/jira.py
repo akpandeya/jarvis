@@ -148,7 +148,20 @@ class Jira:
                         "status": status,
                         "issue_type": issue_type,
                     },
-                    entities=[],
+                    entities=[
+                        (
+                            "jira_issue",
+                            key,
+                            "subject",
+                            {
+                                "status": status,
+                                "issue_type": issue_type,
+                                "summary": summary,
+                                "url": url,
+                                "source_tags": ["recent"],
+                            },
+                        )
+                    ],
                 )
             )
 
