@@ -117,12 +117,32 @@ def upsert_entity(
     name: str,
     aliases: list[str] | None = None,
     metadata: dict | None = None,
+    merge_metadata: bool = False,
 ) -> str:
-    """Insert or update an entity. Returns the entity ID."""
+    """Insert or update an entity. Returns the entity ID.
+
+    When merge_metadata is True and the entity already exists, the caller's
+    metadata dict is shallow-merged into the stored one. Lists with the same
+    key (e.g. source_tags) are unioned (dedup preserving order).
+    """
     row = conn.execute(
-        "SELECT id FROM entities WHERE kind = ? AND name = ?", (kind, name)
+        "SELECT id, metadata FROM entities WHERE kind = ? AND name = ?", (kind, name)
     ).fetchone()
     if row:
+        if merge_metadata and metadata:
+            existing: dict = json.loads(row["metadata"]) if row["metadata"] else {}
+            merged = dict(existing)
+            for k, v in metadata.items():
+                if isinstance(v, list) and isinstance(existing.get(k), list):
+                    seen = set()
+                    merged[k] = [x for x in (*existing[k], *v) if not (x in seen or seen.add(x))]
+                else:
+                    merged[k] = v
+            conn.execute(
+                "UPDATE entities SET metadata = ? WHERE id = ?",
+                (json.dumps(merged), row["id"]),
+            )
+            conn.commit()
         return row["id"]
     entity_id = str(ULID())
     conn.execute(
@@ -437,6 +457,45 @@ def set_repo_path_account(conn: sqlite3.Connection, path_id: str, gh_account: st
 def set_repo_path_enabled(conn: sqlite3.Connection, path_id: str, enabled: bool) -> None:
     conn.execute("UPDATE repo_paths SET enabled=? WHERE id=?", (1 if enabled else 0, path_id))
     conn.commit()
+
+
+# --- Jira board subscriptions ---
+
+
+def list_jira_board_subs(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM jira_board_subs ORDER BY added_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_jira_board_sub(
+    conn: sqlite3.Connection,
+    host: str,
+    project_key: str,
+    board_id: int,
+    nickname: str,
+) -> str:
+    """Insert or update a Jira board subscription. Returns the row id."""
+    row_id = str(ULID())
+    conn.execute(
+        """INSERT INTO jira_board_subs (id, host, project_key, board_id, nickname, added_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(host, board_id) DO UPDATE SET
+               nickname=excluded.nickname,
+               project_key=excluded.project_key""",
+        (row_id, host, project_key, board_id, nickname, datetime.now().isoformat()),
+    )
+    conn.commit()
+    # Fetch whichever id is stored (original or existing) so callers can use it.
+    row = conn.execute(
+        "SELECT id FROM jira_board_subs WHERE host=? AND board_id=?", (host, board_id)
+    ).fetchone()
+    return row["id"] if row else row_id
+
+
+def delete_jira_board_sub(conn: sqlite3.Connection, board_id: int) -> int:
+    cursor = conn.execute("DELETE FROM jira_board_subs WHERE board_id = ?", (board_id,))
+    conn.commit()
+    return cursor.rowcount
 
 
 def subscriptions_watching(conn: sqlite3.Connection) -> list[dict]:

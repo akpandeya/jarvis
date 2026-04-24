@@ -15,8 +15,9 @@ class RawEvent:
     metadata: dict | None = None
     url: str | None = None
     project: str | None = None
-    entities: list[tuple[str, str, str]] = field(default_factory=list)
-    # entities: list of (entity_kind, entity_name, role)
+    entities: list[tuple[str, str, str] | tuple[str, str, str, dict]] = field(default_factory=list)
+    # entities: list of (entity_kind, entity_name, role) or
+    #          (entity_kind, entity_name, role, metadata_to_merge)
 
 
 class Integration(Protocol):
