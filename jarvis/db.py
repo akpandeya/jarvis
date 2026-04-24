@@ -472,6 +472,16 @@ def subscriptions_later(conn: sqlite3.Connection) -> list[dict]:
 
 
 def set_pr_watch_state(conn: sqlite3.Connection, repo: str, pr_number: int, state: str) -> None:
+    import logging
+    import traceback
+
+    logging.getLogger(__name__).info(
+        "set_pr_watch_state repo=%s pr=%s state=%s caller=%s",
+        repo,
+        pr_number,
+        state,
+        "".join(traceback.format_stack()[-5:-1]).replace("\n", " "),
+    )
     conn.execute(
         "UPDATE pr_subscriptions SET watch_state=? WHERE repo=? AND pr_number=?",
         (state, repo, pr_number),
