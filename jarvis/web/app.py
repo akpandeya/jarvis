@@ -1167,6 +1167,69 @@ def api_prs_review(
     return RedirectResponse(url=f"/chat?session={new_session_id}&autostart=1", status_code=303)
 
 
+@app.post("/api/prs/{repo_encoded}/{pr_number}/rereview", response_class=HTMLResponse)
+def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
+    """Fetch latest diff and inject it into the existing review session."""
+    import os
+
+    from fastapi.responses import RedirectResponse
+
+    from jarvis.config import JarvisConfig
+
+    repo = _repo_decode(repo_encoded)
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE repo=? AND pr_number=?", (repo, pr_number)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return HTMLResponse("PR not found", status_code=404)
+    sub = dict(row)
+
+    existing_session = sub.get("chat_session_id")
+    if not existing_session:
+        # No session yet — fall through to first review
+        conn.close()
+        return RedirectResponse(url=f"/api/prs/{repo_encoded}/{pr_number}/review", status_code=303)
+
+    try:
+        cfg_model = JarvisConfig.load().pr_monitor.review_model
+    except Exception:
+        cfg_model = ""
+    available = _claude_models()
+    if not cfg_model or cfg_model in ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"):
+        cfg_model = available[0]["id"] if available else "claude-opus-4-7"
+    chosen_model = model or cfg_model
+
+    token = _token_for_repo(conn, repo)
+    env = {**os.environ, "GH_TOKEN": token} if token else None
+    diff_result = subprocess.run(
+        ["gh", "pr", "diff", str(pr_number), "--repo", repo],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env or os.environ,
+    )
+    diff_text = diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
+
+    prompt = (
+        f"Please re-review this PR with the latest diff. "
+        f"Focus on any new changes since the last review and update your assessment.\n\n"
+        f"**Latest diff:**\n```diff\n{diff_text}\n```"
+    )
+
+    from jarvis.db import kv_set
+
+    kv_set(
+        conn,
+        f"review_prompt:{existing_session}",
+        json.dumps({"prompt": prompt, "model": chosen_model}),
+    )
+    conn.close()
+
+    return RedirectResponse(url=f"/chat?session={existing_session}&autostart=1", status_code=303)
+
+
 @app.get("/api/prs/pending-count")
 def api_prs_pending_count():
     conn = get_db()
