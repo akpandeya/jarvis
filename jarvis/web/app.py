@@ -486,13 +486,24 @@ def prs_page(
     dismissed = _subscriptions_dismissed(conn)
 
     # Attach gh_account to each sub so the template can pass it to /api/open-url
-    repo_account_map = {
-        _remote_for_local_repo(str(Path(r["path"]).expanduser())): r["gh_account"]
-        for r in list_repo_paths(conn)
-        if r.get("gh_account")
-    }
+    # Build exact repo→account map from configured local paths
+    repo_account_map: dict[str, str] = {}
+    owner_account_map: dict[str, str] = {}  # fallback: owner prefix → account
+    for r in list_repo_paths(conn):
+        if not r.get("gh_account"):
+            continue
+        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+        if full_repo:
+            repo_account_map[full_repo] = r["gh_account"]
+            owner = full_repo.split("/")[0]
+            owner_account_map.setdefault(owner, r["gh_account"])
     for sub in active:
-        sub["gh_account"] = repo_account_map.get(sub["repo"]) or ""
+        repo = sub["repo"]
+        account = repo_account_map.get(repo)
+        if not account:
+            owner = repo.split("/")[0] if "/" in repo else repo
+            account = owner_account_map.get(owner, "")
+        sub["gh_account"] = account
 
     # Build filter option lists from all active subs
     all_repos = sorted({s["repo"] for s in active})
