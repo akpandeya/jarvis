@@ -498,10 +498,10 @@ def prs_page(
             owner = full_repo.split("/")[0]
             owner_account_map.setdefault(owner, r["gh_account"])
     for sub in active:
-        repo = sub["repo"]
-        account = repo_account_map.get(repo)
+        sub_repo = sub["repo"]
+        account = repo_account_map.get(sub_repo)
         if not account:
-            owner = repo.split("/")[0] if "/" in repo else repo
+            owner = sub_repo.split("/")[0] if "/" in sub_repo else sub_repo
             account = owner_account_map.get(owner, "")
         sub["gh_account"] = account
 
