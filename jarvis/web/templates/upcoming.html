@@ -95,12 +95,24 @@
   }
 </style>
 
-<div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:1.25rem">
+<div style="display:flex;align-items:baseline;gap:.75rem;margin-bottom:1rem">
   <h2 style="margin:0">Upcoming</h2>
   <span style="font-size:.85em;color:var(--pico-muted-color)">
     {{ today.strftime("%A, %B %-d") }}
   </span>
 </div>
+
+<details style="margin-bottom:1rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.6rem 1rem">
+  <summary style="cursor:pointer;font-weight:600;font-size:.85em">Calendar account → Firefox profile</summary>
+  <p style="font-size:.8em;color:var(--pico-muted-color);margin:.4rem 0 .6rem">
+    Map each calendar account to a GitHub account so meetings open in the right Firefox profile.
+  </p>
+  <div id="gcal-account-map-list"
+       hx-get="/api/settings/gcal-account-map"
+       hx-trigger="load">
+    <span style="color:var(--pico-muted-color);font-size:.85em">Loading…</span>
+  </div>
+</details>
 
 <div class="upcoming-grid">
 
