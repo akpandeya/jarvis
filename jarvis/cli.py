@@ -1016,6 +1016,30 @@ def update() -> None:
                 after_sha = "unknown"
             console.print(f"[green]Pulled[/green] {before_sha} → {after_sha}")
 
+    # Build the React frontend so the wheel ships with the static bundle.
+    frontend_dir = repo / "frontend"
+    if frontend_dir.exists():
+        console.print("[blue]Building frontend...[/blue]")
+        if not (frontend_dir / "node_modules").exists():
+            install_result = subprocess.run(
+                ["npm", "ci", "--no-audit", "--no-fund"],
+                capture_output=True,
+                text=True,
+                cwd=str(frontend_dir),
+            )
+            if install_result.returncode != 0:
+                console.print(f"[red]npm ci failed:[/red] {install_result.stderr.strip()[-400:]}")
+                raise typer.Exit(1)
+        fe_build = subprocess.run(
+            ["npm", "run", "build"],
+            capture_output=True,
+            text=True,
+            cwd=str(frontend_dir),
+        )
+        if fe_build.returncode != 0:
+            console.print(f"[red]Frontend build failed:[/red] {fe_build.stderr.strip()[-400:]}")
+            raise typer.Exit(1)
+
     console.print("[blue]Reinstalling...[/blue]")
     # Build a wheel first so the installed copy is not live-linked to the repo
     build_result = subprocess.run(
