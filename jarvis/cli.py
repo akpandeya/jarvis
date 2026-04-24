@@ -530,6 +530,113 @@ def suggest_snooze(
     console.print(f"[green]Snoozed[/green] {rule_id} for {minutes} minutes.")
 
 
+# --- GCal subcommands ---
+
+gcal_app = typer.Typer(help="Manage Google Calendar accounts")
+app.add_typer(gcal_app, name="gcal")
+
+
+@gcal_app.command("auth")
+def gcal_auth(
+    name: str = typer.Argument(..., help="Account label, e.g. 'work' or 'personal'"),
+    credentials: str = typer.Option(
+        ..., "--credentials", "-c", help="Path to OAuth client credentials JSON"
+    ),
+) -> None:
+    """Authenticate a Google account and save its token."""
+    import shutil
+
+    from jarvis.config import JARVIS_HOME
+    from jarvis.integrations.gcal import authenticate
+
+    src = Path(credentials).expanduser()
+    if not src.exists():
+        console.print(f"[red]File not found:[/red] {src}")
+        raise typer.Exit(1)
+
+    slug = name.lower().replace(" ", "_")
+    dest = JARVIS_HOME / f"gcal_{slug}_creds.json"
+    shutil.copy2(src, dest)
+    console.print(f"Credentials copied to [bold]{dest}[/bold]")
+    console.print("Opening browser for OAuth…")
+
+    if not authenticate(name, str(dest)):
+        console.print("[red]Authentication failed.[/red] Check the credentials file.")
+        raise typer.Exit(1)
+
+    console.print(f"[green]✓ Authenticated as[/green] [bold]{name}[/bold]")
+    console.print("\nAdd this to [bold]~/.jarvis/config.toml[/bold]:\n")
+    console.print(
+        f"[[gcal.accounts]]\n"
+        f'name = "{name}"\n'
+        f'credentials_path = "{dest}"\n'
+        f'calendar_ids = ["primary"]'
+    )
+    console.print(
+        "\nThen run [bold]jarvis gcal list-calendars "
+        + name
+        + "[/bold] to see available calendars."
+    )
+
+
+@gcal_app.command("list-calendars")
+def gcal_list_calendars(
+    name: str = typer.Argument(..., help="Account label as set in config"),
+) -> None:
+    """List all calendars for a configured GCal account."""
+    from jarvis.config import JarvisConfig
+    from jarvis.integrations.gcal import list_calendars
+
+    cfg = JarvisConfig.load()
+    acct = next((a for a in cfg.gcal.accounts if a.name.lower() == name.lower()), None)
+    if acct is None:
+        console.print(f"[red]No account named '{name}' found in config.[/red]")
+        raise typer.Exit(1)
+
+    creds = str(Path(acct.credentials_path).expanduser())
+    cals = list_calendars(name, creds)
+    if not cals:
+        console.print("[yellow]No calendars found or not authenticated.[/yellow]")
+        return
+
+    from rich.table import Table
+
+    table = Table(title=f"Calendars for {name}")
+    table.add_column("Name")
+    table.add_column("ID")
+    table.add_column("Primary")
+    for c in cals:
+        table.add_row(c["name"], c["id"], "✓" if c["primary"] else "")
+    console.print(table)
+
+
+@gcal_app.command("status")
+def gcal_status() -> None:
+    """Show configured GCal accounts and token status."""
+    from jarvis.config import JarvisConfig
+    from jarvis.integrations.gcal import _token_path
+
+    cfg = JarvisConfig.load()
+    if not cfg.gcal.accounts:
+        console.print(
+            "[yellow]No GCal accounts configured.[/yellow] "
+            "Run [bold]jarvis gcal auth <name> --credentials <path>[/bold] to set one up."
+        )
+        return
+
+    from rich.table import Table
+
+    table = Table(title="GCal Accounts")
+    table.add_column("Name")
+    table.add_column("Token")
+    table.add_column("Calendars")
+    for acct in cfg.gcal.accounts:
+        token = _token_path(acct.name)
+        token_status = "[green]✓ saved[/green]" if token.exists() else "[red]missing[/red]"
+        table.add_row(acct.name, token_status, ", ".join(acct.calendar_ids))
+    console.print(table)
+
+
 # --- PR Monitor subcommands ---
 
 pr_app = typer.Typer(help="Monitor open pull requests")

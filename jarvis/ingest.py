@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from rich.console import Console
 
@@ -66,13 +67,16 @@ def ingest_all(
     if config.jira.enabled and source_filter in (None, "jira"):
         integrations.append(Jira(project_keys=config.jira.project_keys or None))
 
-    if config.gcal.credentials_path and source_filter in (None, "gcal"):
-        integrations.append(
-            GCal(
-                calendar_id=config.gcal.calendar_id,
-                credentials_path=config.gcal.credentials_path,
+    if source_filter in (None, "gcal"):
+        for acct in config.gcal.accounts:
+            creds = str(Path(acct.credentials_path).expanduser())
+            integrations.append(
+                GCal(
+                    account_name=acct.name,
+                    credentials_path=creds,
+                    calendar_ids=acct.calendar_ids,
+                )
             )
-        )
 
     if config.kafka.enabled and source_filter in (None, "kafka"):
         integrations.append(Kafka())
