@@ -405,3 +405,28 @@ def set_repo_path_account(conn: sqlite3.Connection, path_id: str, gh_account: st
 def set_repo_path_enabled(conn: sqlite3.Connection, path_id: str, enabled: bool) -> None:
     conn.execute("UPDATE repo_paths SET enabled=? WHERE id=?", (1 if enabled else 0, path_id))
     conn.commit()
+
+
+def update_pr_cache(
+    conn: sqlite3.Connection,
+    repo: str,
+    pr_number: int,
+    ci_status: str | None,
+    review_decision: str | None,
+    title: str | None = None,
+    author: str | None = None,
+    branch: str | None = None,
+    pr_url: str | None = None,
+    state: str | None = None,
+) -> None:
+    now = datetime.now().isoformat()
+    conn.execute(
+        """UPDATE pr_subscriptions
+           SET ci_status=?, review_decision=?,
+               title=COALESCE(?,title), author=COALESCE(?,author),
+               branch=COALESCE(?,branch), pr_url=COALESCE(?,pr_url),
+               state=COALESCE(?,state), last_fetched_at=?
+           WHERE repo=? AND pr_number=?""",
+        (ci_status, review_decision, title, author, branch, pr_url, state, now, repo, pr_number),
+    )
+    conn.commit()
