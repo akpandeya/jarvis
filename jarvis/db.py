@@ -464,6 +464,13 @@ def subscriptions_dismissed(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def subscriptions_later(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM pr_subscriptions WHERE watch_state='later' ORDER BY subscribed_at DESC"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def set_pr_watch_state(conn: sqlite3.Connection, repo: str, pr_number: int, state: str) -> None:
     conn.execute(
         "UPDATE pr_subscriptions SET watch_state=? WHERE repo=? AND pr_number=?",

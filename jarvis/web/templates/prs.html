@@ -127,6 +127,12 @@
       + Watch
     </button>
     <button class="btn-sm btn-sm-muted"
+      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
+      hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
+      hx-swap="outerHTML">
+      Later
+    </button>
+    <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
       hx-target="#pending-{{ encoded }}-{{ sub.pr_number }}"
       hx-swap="outerHTML">
@@ -241,6 +247,12 @@
     {% endif %}
 
     <button class="btn-sm btn-sm-muted"
+      hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/later"
+      hx-target="#watching-{{ encoded }}-{{ sub.pr_number }}"
+      hx-swap="outerHTML">
+      Later
+    </button>
+    <button class="btn-sm btn-sm-muted"
       hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
       hx-target="#watching-{{ encoded }}-{{ sub.pr_number }}"
       hx-swap="outerHTML">
@@ -252,6 +264,52 @@
 </article>
 {% endfor %}
 </div>
+{% endif %}
+
+{# ── Later ── #}
+{% if later %}
+<details style="margin-top:.75rem;border:1px solid var(--pico-muted-border-color);border-radius:6px;padding:.6rem 1rem">
+  <summary style="cursor:pointer;font-size:.85em;color:var(--pico-muted-color)">
+    Later ({{ later | length }})
+  </summary>
+  <div style="margin-top:.6rem">
+  {% for sub in later %}
+  {% set encoded = sub.repo | replace("/", "--") %}
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--pico-muted-border-color);flex-wrap:wrap;gap:.5rem"
+       id="later-{{ encoded }}-{{ sub.pr_number }}">
+    <div style="font-size:.84em">
+      <a href="{{ sub.pr_url or '#' }}" target="_blank" style="text-decoration:none">
+        #{{ sub.pr_number }} {{ sub.title or "(unknown title)" }}
+      </a>
+      <span style="color:var(--pico-muted-color);margin-left:.4rem">{{ sub.repo }}</span>
+      {% if sub.author %}<span style="color:var(--pico-muted-color)"> · {{ sub.author }}</span>{% endif %}
+    </div>
+    <div style="display:flex;gap:.4rem">
+      <button class="btn-sm btn-sm-primary"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/watch"
+        hx-target="#later-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML"
+        hx-on:htmx:after-request="location.reload()">
+        + Watch
+      </button>
+      <button class="btn-sm btn-sm-muted"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/restore"
+        hx-target="#later-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML"
+        hx-on:htmx:after-request="location.reload()">
+        ↩ Pending
+      </button>
+      <button class="btn-sm btn-sm-muted"
+        hx-post="/api/prs/{{ encoded }}/{{ sub.pr_number }}/dismiss"
+        hx-target="#later-{{ encoded }}-{{ sub.pr_number }}"
+        hx-swap="outerHTML">
+        Dismiss
+      </button>
+    </div>
+  </div>
+  {% endfor %}
+  </div>
+</details>
 {% endif %}
 
 {# ── Dismissed ── #}
