@@ -3,7 +3,7 @@
 import subprocess as _subprocess
 from pathlib import Path as _Path
 
-__version__ = "0.5.10"
+__version__ = "0.5.11"
 
 # In a dev checkout (.git present), append the git SHA so it's distinguishable
 # from a clean installed copy (where .git is absent from the uv tool cache).
