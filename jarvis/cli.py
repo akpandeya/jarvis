@@ -1176,6 +1176,55 @@ def install() -> None:
     run_install()
 
 
+# --- Claude Code hook subcommands ---
+
+hooks_app = typer.Typer(help="Manage Claude Code hooks that tag jarvis sessions")
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("install")
+def hooks_install() -> None:
+    """Add SessionStart / PostToolUse / SessionEnd hooks to ~/.claude/settings.json."""
+    from jarvis.hooks import CLAUDE_SETTINGS_PATH, install_hooks
+
+    added = install_hooks()
+    if added:
+        console.print(f"[green]Installed hooks:[/green] {', '.join(added)}")
+    else:
+        console.print("[yellow]All jarvis hooks already installed.[/yellow]")
+    console.print(f"  Settings: {CLAUDE_SETTINGS_PATH}")
+
+
+@hooks_app.command("uninstall")
+def hooks_uninstall() -> None:
+    """Remove jarvis-managed hooks from ~/.claude/settings.json."""
+    from jarvis.hooks import uninstall_hooks
+
+    removed = uninstall_hooks()
+    if removed:
+        console.print(f"[green]Removed hooks from:[/green] {', '.join(removed)}")
+    else:
+        console.print("[dim]No jarvis-managed hooks found.[/dim]")
+
+
+@hooks_app.command("status")
+def hooks_status() -> None:
+    """Show which jarvis hooks are currently installed."""
+    from jarvis.hooks import status as hooks_status_fn
+
+    for event, present in hooks_status_fn().items():
+        mark = "[green]✓[/green]" if present else "[dim]·[/dim]"
+        console.print(f"  {mark} {event}")
+
+
+@hooks_app.command("handle")
+def hooks_handle() -> None:
+    """Process a Claude Code hook payload on stdin (invoked by Claude, not humans)."""
+    from jarvis.hooks import handle_stdin
+
+    raise typer.Exit(code=handle_stdin())
+
+
 @app.command()
 def menubar() -> None:
     """Start the macOS menu bar tray icon."""

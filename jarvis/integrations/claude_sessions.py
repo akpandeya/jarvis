@@ -115,7 +115,7 @@ def _parse_session(jsonl_path: Path, since: datetime) -> RawEvent | None:
         title=title,
         happened_at=started_at,
         body=first_assistant_msg[:500] or None,
-        url=None,
+        url=f"claude-session://{session_id}",
         project=project_name,
         metadata={
             "session_id": session_id,

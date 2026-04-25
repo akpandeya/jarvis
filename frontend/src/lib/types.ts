@@ -10,18 +10,49 @@ export interface Session {
   context: string;
 }
 
+export interface PrLink {
+  repo: string;
+  number: number;
+}
+
 export interface ClaudeSession {
   title: string | null;
+  display_title: string | null;
   happened_at: string | null;
+  last_active: string | null;
   session_id: string | null;
   branch: string | null;
   cwd: string | null;
+  project: string | null;
   turns: number | null;
+  tags: string[];
+  archived: boolean;
+  pr_links: PrLink[];
 }
 
 export interface SessionsResponse {
   sessions: Session[];
   claude_sessions: ClaudeSession[];
+  total: number;
+  projects: string[];
+  all_tags: string[];
+}
+
+export interface ClaudeSessionFilters {
+  repo?: string | null;
+  tag?: string[];
+  archived?: "0" | "1" | "all";
+  q?: string | null;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ClaudeSessionPatch {
+  display_title?: string | null;
+  clear_display_title?: boolean;
+  archived?: boolean;
+  add_tags?: string[];
+  remove_tags?: string[];
 }
 
 export interface Event {

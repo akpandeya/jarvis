@@ -3,6 +3,8 @@
 
 import type {
   ChatSessionMeta,
+  ClaudeSessionFilters,
+  ClaudeSessionPatch,
   DiscoverResponse,
   InsightsResponse,
   OkResponse,
@@ -62,7 +64,28 @@ export function encodeRepo(repo: string): string {
 
 export const api = {
   // Sessions / Focus
-  sessions: () => req<SessionsResponse>("/api/sessions"),
+  sessions: (params?: ClaudeSessionFilters) => {
+    const q = new URLSearchParams();
+    if (params?.repo) q.set("repo", params.repo);
+    if (params?.archived) q.set("archived", params.archived);
+    if (params?.q) q.set("q", params.q);
+    if (params?.limit != null) q.set("limit", String(params.limit));
+    if (params?.offset != null) q.set("offset", String(params.offset));
+    for (const t of params?.tag ?? []) q.append("tag", t);
+    const qs = q.toString();
+    return req<SessionsResponse>(`/api/sessions${qs ? `?${qs}` : ""}`);
+  },
+  claudeSessionPatch: (sessionId: string, body: ClaudeSessionPatch) =>
+    req<{
+      session_id: string;
+      display_title: string | null;
+      archived: boolean;
+      tags: string[];
+    }>(`/api/claude-sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   upcoming: () => req<UpcomingResponse>("/api/upcoming"),
 
   // Timeline / search / insights
