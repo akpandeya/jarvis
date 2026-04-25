@@ -3,6 +3,7 @@ name: Version Bump
 on:
   push:
     branches: ["main"]
+  workflow_dispatch: {}
 
 jobs:
   bump:
@@ -68,6 +69,11 @@ jobs:
           BRANCH="chore/bump-version-${NEW}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # A prior run may have left a stale branch/PR for this version
+          # (e.g. it was closed without merging). Close and delete so we can
+          # push a fresh branch from main without a non-fast-forward rebuff.
+          gh pr close "$BRANCH" --delete-branch 2>/dev/null || true
+          git push origin --delete "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           git add pyproject.toml jarvis/__init__.py
           git commit -m "chore: bump version to ${NEW}"
