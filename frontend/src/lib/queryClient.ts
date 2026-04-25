@@ -25,5 +25,6 @@ export const keys = {
   settingsRepoPaths: ["settings", "repo-paths"] as const,
   settingsBrowserProfiles: ["settings", "browser-profiles"] as const,
   settingsGcalAccountMap: ["settings", "gcal-account-map"] as const,
+  settingsJiraProfiles: ["settings", "jira-profiles"] as const,
   chatSession: (id: string) => ["chat", "session", id] as const,
 };

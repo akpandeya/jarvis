@@ -10,6 +10,7 @@ const items: { to: string; label: string; badge?: "pending-count" }[] = [
   { to: "/prs", label: "PRs", badge: "pending-count" },
   { to: "/chat", label: "Chat" },
   { to: "/insights", label: "Insights" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export function Nav() {

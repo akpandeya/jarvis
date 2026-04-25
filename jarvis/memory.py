@@ -32,24 +32,27 @@ def capture_session(project: str | None = None, days: int = 1) -> str:
     return summary
 
 
-def _active_sprint_section(conn) -> str:
-    """Render a markdown "Active Sprint" block for each subscribed board.
+def _group_sprint_tickets(conn) -> list[dict]:
+    """Return active-sprint tickets grouped by board and bucket.
 
-    Returns the empty string when the user has no board subscriptions or the
-    board has no active-sprint entities yet (e.g. before first ingest).
-    Bucketing (mine / unassigned / others) is pre-computed by the
-    JiraBoards integration via three disjoint JQL queries — we just render.
+    Returns a list — one entry per subscribed board that has tickets. Each
+    entry has {board_id, host, project_key, nickname, sprint_name,
+    mine, unassigned, others}. The three bucket lists contain ticket dicts
+    with fields key, status, summary, assignee, issue_type, priority, url.
+    Done/closed/won't do tickets are filtered out.
+
+    This is the single source of truth for sprint data — the CLI briefing
+    (`_active_sprint_section`) renders it as markdown, the web dashboard
+    (`api_upcoming`) ships it as JSON.
     """
     subs = list_jira_board_subs(conn)
     if not subs:
-        return ""
+        return []
 
-    # Pull every jira_issue entity tagged for a subscribed board.
     rows = conn.execute(
         "SELECT name, metadata FROM entities WHERE kind='jira_issue' AND metadata IS NOT NULL"
     ).fetchall()
 
-    # Group entities by board_id.
     by_board: dict[int, list[dict]] = {sub["board_id"]: [] for sub in subs}
     for r in rows:
         meta = json.loads(r["metadata"])
@@ -65,48 +68,83 @@ def _active_sprint_section(conn) -> str:
             continue
         by_board[bid].append({"key": r["name"], **meta})
 
-    if not any(by_board.values()):
-        return ""
-
-    out: list[str] = ["## Active Sprints"]
+    _DONE = {"done", "closed", "won't do"}
+    out: list[dict] = []
     for sub in subs:
         tickets = by_board.get(sub["board_id"], [])
         if not tickets:
             continue
-        sprint_name = tickets[0].get("sprint_name") or ""
-        header = f"### {sub['nickname']}"
-        if sprint_name:
-            header += f" — {sprint_name}"
-        out.append(header)
-
         mine, unassigned, others = [], [], []
         for t in tickets:
             status = (t.get("status") or "").strip()
-            if status.lower() in ("done", "closed", "won't do"):
+            if status.lower() in _DONE:
                 continue
-            summary = (t.get("summary") or "").strip()
+            row = {
+                "key": t["key"],
+                "status": status,
+                "summary": (t.get("summary") or "").strip(),
+                "assignee": (t.get("assignee") or "").strip(),
+                "issue_type": (t.get("issue_type") or "").strip(),
+                "priority": (t.get("priority") or "").strip(),
+                "url": t.get("url") or "",
+            }
             bucket = t.get("bucket")
             if bucket == "mine":
-                mine.append(f"- **{t['key']}** ({status}) {summary}".rstrip())
+                mine.append(row)
             elif bucket == "unassigned":
-                unassigned.append(f"- **{t['key']}** ({status}) {summary}".rstrip())
+                unassigned.append(row)
             elif bucket == "others":
-                assignee = (t.get("assignee") or "").strip()
-                others.append(f"- {t['key']} ({status}) — {assignee}")
+                others.append(row)
 
-        if mine:
+        if not (mine or unassigned or others):
+            continue
+        sprint_name = tickets[0].get("sprint_name") or ""
+        out.append(
+            {
+                "board_id": sub["board_id"],
+                "host": sub["host"],
+                "project_key": sub["project_key"],
+                "nickname": sub["nickname"],
+                "sprint_name": sprint_name,
+                "mine": mine,
+                "unassigned": unassigned,
+                "others": others,
+            }
+        )
+    return out
+
+
+def _active_sprint_section(conn) -> str:
+    """Markdown "Active Sprints" block for the CLI briefing."""
+    groups = _group_sprint_tickets(conn)
+    if not groups:
+        return ""
+
+    out: list[str] = ["## Active Sprints"]
+    for g in groups:
+        header = f"### {g['nickname']}"
+        if g["sprint_name"]:
+            header += f" — {g['sprint_name']}"
+        out.append(header)
+
+        if g["mine"]:
             out.append("**Mine:**")
-            out.extend(mine)
-        if unassigned:
-            out.append(f"**Unassigned (up for grabs, {len(unassigned)} tickets):**")
-            out.extend(unassigned[:10])
-            if len(unassigned) > 10:
-                out.append(f"- _…and {len(unassigned) - 10} more_")
-        if others:
-            out.append(f"**In flight (others, {len(others)} tickets):**")
-            out.extend(others[:5])
-            if len(others) > 5:
-                out.append(f"- _…and {len(others) - 5} more_")
+            for t in g["mine"]:
+                out.append(f"- **{t['key']}** ({t['status']}) {t['summary']}".rstrip())
+        if g["unassigned"]:
+            n = len(g["unassigned"])
+            out.append(f"**Unassigned (up for grabs, {n} tickets):**")
+            for t in g["unassigned"][:10]:
+                out.append(f"- **{t['key']}** ({t['status']}) {t['summary']}".rstrip())
+            if n > 10:
+                out.append(f"- _…and {n - 10} more_")
+        if g["others"]:
+            n = len(g["others"])
+            out.append(f"**In flight (others, {n} tickets):**")
+            for t in g["others"][:5]:
+                out.append(f"- {t['key']} ({t['status']}) — {t['assignee']}")
+            if n > 5:
+                out.append(f"- _…and {n - 5} more_")
     return "\n".join(out) + "\n"
 
 

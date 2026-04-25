@@ -7,6 +7,46 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Event } from "../lib/types";
 
+function EventLink({ event }: { event: Event }) {
+  const open = useMutation({
+    mutationFn: () => {
+      if (!event.url) return Promise.resolve({ ok: true });
+      // Jira events route through the per-host profile map.
+      if (event.source === "jira") {
+        let host = "";
+        try {
+          host = new URL(event.url).host;
+        } catch {
+          // malformed URL; fall through
+        }
+        return api.openUrl(event.url, { jira_host: host });
+      }
+      return api.openUrl(event.url);
+    },
+    onError: () => toast.error("Failed to open"),
+  });
+  if (!event.url) return null;
+  return (
+    <>
+      {" · "}
+      <button
+        onClick={() => open.mutate()}
+        style={{
+          background: "none",
+          border: 0,
+          padding: 0,
+          color: "var(--color-primary)",
+          cursor: "pointer",
+          font: "inherit",
+          textDecoration: "underline",
+        }}
+      >
+        link
+      </button>
+    </>
+  );
+}
+
 export function EventList({ events }: { events: Event[] }) {
   return (
     <>
@@ -25,14 +65,7 @@ export function EventList({ events }: { events: Event[] }) {
           <div style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>
             {new Date(e.happened_at).toLocaleString()} · {e.kind}
             {e.project && <> · {e.project}</>}
-            {e.url && (
-              <>
-                {" · "}
-                <a href={e.url} target="_blank" rel="noreferrer">
-                  link
-                </a>
-              </>
-            )}
+            <EventLink event={e} />
             {e.source === "claude_sessions" &&
               e.metadata &&
               typeof (e.metadata as { session_id?: string }).session_id === "string" && (

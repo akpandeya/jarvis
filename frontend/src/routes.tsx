@@ -8,6 +8,7 @@ import Sessions from "./pages/Sessions";
 import Insights from "./pages/Insights";
 import Chat from "./pages/Chat";
 import Prs from "./pages/Prs";
+import Settings from "./pages/Settings";
 
 export const router = createBrowserRouter([
   {
@@ -23,6 +24,7 @@ export const router = createBrowserRouter([
       { path: "insights", element: <Insights /> },
       { path: "chat", element: <Chat /> },
       { path: "prs", element: <Prs /> },
+      { path: "settings", element: <Settings /> },
       { path: "*", element: <Navigate to="/upcoming" replace /> },
     ],
   },

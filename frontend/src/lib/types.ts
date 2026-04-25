@@ -105,11 +105,33 @@ export interface ClaudeModel {
   id: string;
 }
 
+export interface JiraTicket {
+  key: string;
+  status: string;
+  summary: string;
+  assignee: string;
+  issue_type: string;
+  priority: string;
+  url: string;
+}
+
+export interface ActiveSprint {
+  board_id: number;
+  host: string;
+  project_key: string;
+  nickname: string;
+  sprint_name: string;
+  mine: JiraTicket[];
+  unassigned: JiraTicket[];
+  others: JiraTicket[];
+}
+
 export interface UpcomingResponse {
   today: string; // ISO date (YYYY-MM-DD)
   today_label: string; // pretty e.g. "Friday, April 24"
   meetings: Meeting[];
   top_prs: PrSubscription[];
+  active_sprints: ActiveSprint[];
   review_model: string;
   available_models: ClaudeModel[];
 }

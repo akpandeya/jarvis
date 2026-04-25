@@ -7,6 +7,7 @@ import { keys, queryClient } from "../lib/queryClient";
 import { AccountBadge } from "../components/AccountBadge";
 import { usePollRunning } from "../hooks/usePollRunning";
 import { CiBadge, ReviewBadge } from "./Prs/badges";
+import { ActiveSprintSection } from "./Upcoming/ActiveSprintSection";
 import type { Meeting, PrSubscription } from "../lib/types";
 
 function useNow(intervalMs = 60_000): number {
@@ -277,6 +278,8 @@ export default function Upcoming() {
         <h2 style={{ margin: 0 }}>Focus</h2>
         <span style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>{data.today_label}</span>
       </div>
+
+      <ActiveSprintSection sprints={data.active_sprints ?? []} />
 
       <div
         style={{
