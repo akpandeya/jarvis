@@ -400,13 +400,59 @@ export default function Sessions() {
         </div>
       )}
 
-      {claude.length === 0 ? (
-        <p style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>
-          No sessions match these filters.
-        </p>
-      ) : (
-        claude.map((s) => <SessionCard key={s.session_id!} s={s} />)
-      )}
+      {(() => {
+        const reviewSessions = claude.filter((s) =>
+          s.tags.some((t) => t.startsWith("pr-review:")),
+        );
+        const mainSessions = claude.filter(
+          (s) => !s.tags.some((t) => t.startsWith("pr-review:")),
+        );
+        // If the user is explicitly filtering by a pr-review: tag, skip the
+        // collapse — they're looking for those specifically.
+        const explicitReviewFilter = tags.some((t) => t.startsWith("pr-review:"));
+        return (
+          <>
+            {mainSessions.length === 0 && reviewSessions.length === 0 ? (
+              <p style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>
+                No sessions match these filters.
+              </p>
+            ) : explicitReviewFilter ? (
+              claude.map((s) => <SessionCard key={s.session_id!} s={s} />)
+            ) : (
+              <>
+                {mainSessions.map((s) => (
+                  <SessionCard key={s.session_id!} s={s} />
+                ))}
+                {reviewSessions.length > 0 && (
+                  <details
+                    style={{
+                      marginTop: "1rem",
+                      border: "1px solid var(--color-border)",
+                      borderRadius: 6,
+                      padding: "0.4rem 0.8rem",
+                    }}
+                  >
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        fontSize: "0.85em",
+                        color: "var(--color-muted)",
+                      }}
+                    >
+                      Review conversations ({reviewSessions.length})
+                    </summary>
+                    <div style={{ marginTop: "0.5rem" }}>
+                      {reviewSessions.map((s) => (
+                        <SessionCard key={s.session_id!} s={s} />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </>
+            )}
+          </>
+        );
+      })()}
     </>
   );
 }

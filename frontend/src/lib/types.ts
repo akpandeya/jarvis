@@ -131,6 +131,7 @@ export interface PrSubscription {
   chat_session_id: string | null;
   priority: number;
   gh_account?: string;
+  authoring_session_ids?: string[];
 }
 
 export interface ClaudeModel {

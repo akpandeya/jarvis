@@ -121,10 +121,31 @@ export function PrCard({
           ↗ GitHub
         </button>
 
+        {pr.authoring_session_ids && pr.authoring_session_ids.length > 0 && (
+          <Link
+            to={`/chat?session=${pr.authoring_session_ids[0]}`}
+            style={{ ...btnSm, textDecoration: "none" }}
+            title={
+              pr.authoring_session_ids.length > 1
+                ? `Open the most recent of ${pr.authoring_session_ids.length} authoring conversations`
+                : "Open the conversation that created this PR"
+            }
+          >
+            💬 Conversation
+            {pr.authoring_session_ids.length > 1
+              ? ` (${pr.authoring_session_ids.length})`
+              : ""}
+          </Link>
+        )}
+
         {pr.chat_session_id ? (
           <>
-            <Link to={`/chat?session=${pr.chat_session_id}`} style={{ ...btnSmPrimary, textDecoration: "none" }}>
-              ↩ Continue
+            <Link
+              to={`/chat?session=${pr.chat_session_id}`}
+              style={{ ...btnSmPrimary, textDecoration: "none" }}
+              title="Open the existing review conversation"
+            >
+              ↩ Open review
             </Link>
             <select
               value={model}
@@ -157,7 +178,7 @@ export function PrCard({
               ))}
             </select>
             <button style={btnSmPrimary} onClick={() => review.mutate()} disabled={review.isPending}>
-              Ask Claude
+              Review
             </button>
           </>
         )}
