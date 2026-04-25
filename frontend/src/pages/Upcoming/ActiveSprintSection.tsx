@@ -4,6 +4,14 @@ import { toast } from "sonner";
 import { api } from "../../lib/api";
 import type { ActiveSprint, JiraTicket } from "../../lib/types";
 
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
 function TicketButton({ t, host }: { t: JiraTicket; host: string }) {
   const open = useMutation({
     mutationFn: () => api.openUrl(t.url, { jira_host: host }),
@@ -75,7 +83,7 @@ function Bucket({
 }: {
   label: string;
   tickets: JiraTicket[];
-  host: string;
+  host: string; // "" means derive per-ticket from t.url
   initialLimit: number;
   muted?: boolean;
 }) {
@@ -100,7 +108,7 @@ function Bucket({
       </div>
       <div style={{ display: "flex", flexWrap: "wrap" }}>
         {shown.map((t) => (
-          <TicketButton key={t.key} t={t} host={host} />
+          <TicketButton key={t.key} t={t} host={host || hostOf(t.url)} />
         ))}
         {hidden > 0 && !expanded && (
           <button
@@ -124,11 +132,19 @@ function Bucket({
   );
 }
 
-export function ActiveSprintSection({ sprints }: { sprints: ActiveSprint[] }) {
-  if (!sprints || sprints.length === 0) return null;
+export function ActiveSprintSection({
+  sprints,
+  recent,
+}: {
+  sprints: ActiveSprint[];
+  recent: JiraTicket[];
+}) {
+  const hasSprints = sprints && sprints.length > 0;
+  const hasRecent = recent && recent.length > 0;
+  if (!hasSprints && !hasRecent) return null;
 
   return (
-    <section style={{ marginBottom: "1.5rem" }}>
+    <section style={{ marginTop: "2rem", marginBottom: "1.5rem" }}>
       <div
         style={{
           fontSize: "0.75em",
@@ -141,7 +157,7 @@ export function ActiveSprintSection({ sprints }: { sprints: ActiveSprint[] }) {
           borderBottom: "1px solid var(--color-border-muted)",
         }}
       >
-        Active Sprints
+        Jira
       </div>
 
       {sprints.map((s) => (
@@ -203,6 +219,25 @@ export function ActiveSprintSection({ sprints }: { sprints: ActiveSprint[] }) {
           />
         </div>
       ))}
+
+      {hasRecent && (
+        <div
+          style={{
+            marginBottom: "1.25rem",
+            padding: "0.85rem 1rem",
+            border: "1px solid var(--color-border)",
+            borderRadius: 6,
+          }}
+        >
+          <div style={{ fontWeight: 600 }}>
+            Recent tickets{" "}
+            <span style={{ color: "var(--color-muted)", fontWeight: 400 }}>
+              — touched lately, not on a watched sprint
+            </span>
+          </div>
+          <Bucket label="Recent" tickets={recent} host="" initialLimit={8} />
+        </div>
+      )}
     </section>
   );
 }
