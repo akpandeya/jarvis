@@ -426,6 +426,25 @@ def _attach_gh_accounts(conn, subs: list[dict]) -> list[dict]:
     return subs
 
 
+def _gh_account_for_repo(conn, repo: str) -> str | None:
+    """Return the gh_account mapped to this repo (or its owner), if any."""
+    owner = repo.split("/")[0] if "/" in repo else repo
+    for r in list_repo_paths(conn):
+        if not r.get("gh_account"):
+            continue
+        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+        if full_repo == repo:
+            return r["gh_account"]
+    # Fallback to owner-level mapping.
+    for r in list_repo_paths(conn):
+        if not r.get("gh_account"):
+            continue
+        full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+        if full_repo and full_repo.split("/")[0] == owner:
+            return r["gh_account"]
+    return None
+
+
 def _markdown_to_html(markdown: str) -> str:
     """Cheap markdown → HTML conversion for summary/review rendering."""
     import re
@@ -822,6 +841,48 @@ def api_chat_session(session_id: str, autostart: int = Query(1)):
 
 
 @app.post("/api/chat/stream")
+def _maybe_store_review_verdict(session_id: str, response_text: str) -> None:
+    """Persist the parsed verdict line onto the PR row for badge display."""
+    from jarvis.pr_review_prompts import parse_verdict
+
+    parsed = parse_verdict(response_text)
+    if not parsed:
+        return
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT repo, pr_number FROM pr_subscriptions WHERE chat_session_id=?",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return
+        conn.execute(
+            """UPDATE pr_subscriptions
+               SET last_review_verdict=?, last_review_must_fix=?, last_review_nits=?,
+                   last_review_at=?
+               WHERE repo=? AND pr_number=?""",
+            (
+                parsed["verdict"],
+                parsed["must_fix"],
+                parsed["nits"],
+                datetime.now(UTC).isoformat(),
+                row["repo"],
+                row["pr_number"],
+            ),
+        )
+        conn.commit()
+        logger.info(
+            "pr.verdict repo=%s pr=%s verdict=%s must_fix=%d nits=%d",
+            row["repo"],
+            row["pr_number"],
+            parsed["verdict"],
+            parsed["must_fix"],
+            parsed["nits"],
+        )
+    finally:
+        conn.close()
+
+
 def api_chat_stream(
     message: str = Form(...),
     session_id: str = Form(""),
@@ -849,6 +910,7 @@ def api_chat_stream(
         proc.stdin.write(message)
         proc.stdin.close()
         finished = False
+        full_response: list[str] = []
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.strip()
@@ -860,6 +922,7 @@ def api_chat_stream(
                 if t == "assistant":
                     for block in obj.get("message", {}).get("content", []):
                         if block.get("type") == "text" and block.get("text"):
+                            full_response.append(block["text"])
                             yield f"data: {json.dumps({'text': block['text']})}\n\n"
                 elif t == "result":
                     finished = True
@@ -875,6 +938,14 @@ def api_chat_stream(
             msg = stderr_out or f"claude exited with code {proc.returncode}"
             yield f"data: {json.dumps({'error': msg})}\n\n"
             yield 'data: {"done": true}\n\n'
+
+        # If this session is tied to a PR review, try to parse the verdict
+        # line out of the completed response and persist it for the badge.
+        if finished and full_response:
+            try:
+                _maybe_store_review_verdict(new_id, "".join(full_response))
+            except Exception:
+                logger.exception("failed to store review verdict for %s", new_id)
 
     return StreamingResponse(
         generate(),
@@ -1275,20 +1346,11 @@ def api_prs_review(repo_encoded: str, pr_number: int, model: str = Form("")):
     )
     diff_text = diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
 
-    prompt_parts = [
-        f"Please review this pull request:\n\n**{pr_info.get('title', sub.get('title', ''))}**",
-        f"Repo: {repo} | PR #{pr_number}",
-    ]
-    if pr_info.get("body"):
-        prompt_parts.append(f"\n**Description:**\n{pr_info['body']}")
-    ci = sub.get("ci_status") or "unknown"
-    rd = sub.get("review_decision") or "pending"
-    prompt_parts.append(f"\n**CI:** {ci} | **Reviews:** {rd}")
-    prompt_parts.append(f"\n**Diff:**\n```diff\n{diff_text}\n```")
-    prompt_parts.append(
-        "\nPlease give a thorough code review: correctness, potential bugs, design, test coverage, and any suggestions."
-    )
-    prompt = "\n".join(prompt_parts)
+    from jarvis.pr_review_prompts import build_review_prompt
+
+    my_account = _gh_account_for_repo(conn, repo)
+    is_own_pr = bool(my_account) and pr_info.get("author") == my_account
+    prompt = build_review_prompt(pr_info, sub, repo, pr_number, diff_text, is_own_pr=is_own_pr)
 
     new_session_id = str(uuid_mod.uuid4())
     set_pr_chat_session(conn, repo, pr_number, new_session_id)
@@ -1330,6 +1392,18 @@ def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
     chosen_model = _resolve_review_model(model)
     token = _token_for_repo(conn, repo)
     env = {**os.environ, "GH_TOKEN": token} if token else None
+    pr_info = (
+        _gh(
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "title,body,author,headRefName,reviewDecision,statusCheckRollup",
+            repo=repo,
+            env=env,
+        )
+        or {}
+    )
     diff_result = subprocess.run(
         ["gh", "pr", "diff", str(pr_number), "--repo", repo],
         capture_output=True,
@@ -1339,10 +1413,26 @@ def api_prs_rereview(repo_encoded: str, pr_number: int, model: str = Form("")):
     )
     diff_text = diff_result.stdout[:20000] if diff_result.returncode == 0 else "(diff unavailable)"
 
-    prompt = (
-        "Please re-review this PR with the latest diff. "
-        "Focus on any new changes since the last review and update your assessment.\n\n"
-        f"**Latest diff:**\n```diff\n{diff_text}\n```"
+    # Pull the last assistant message from the review session so the model can
+    # say what's now fixed, still open, or newly introduced.
+    prior_review_md: str | None = None
+    for msg in reversed(_load_chat_history(existing_session)):
+        if msg.get("role") == "assistant" and msg.get("content"):
+            prior_review_md = msg["content"]
+            break
+
+    from jarvis.pr_review_prompts import build_rereview_prompt
+
+    my_account = _gh_account_for_repo(conn, repo)
+    is_own_pr = bool(my_account) and pr_info.get("author") == my_account
+    prompt = build_rereview_prompt(
+        pr_info,
+        sub,
+        repo,
+        pr_number,
+        diff_text,
+        is_own_pr=is_own_pr,
+        prior_review_md=prior_review_md,
     )
 
     kv_set(
