@@ -96,3 +96,76 @@ def test_handle_post_tool_use_ignores_non_pr_bash(db_conn):
         }
     )
     assert "sess-1" not in get_overrides_map(db_conn)
+
+
+# --- SessionStart gh-account routing ---
+
+
+def _register_repo(conn, path: str, account: str | None):
+    from datetime import datetime
+
+    from ulid import ULID
+
+    conn.execute(
+        "INSERT INTO repo_paths (id, path, gh_account, added_at, enabled) VALUES (?, ?, ?, ?, 1)",
+        (str(ULID()), path, account, datetime.now().isoformat()),
+    )
+    conn.commit()
+
+
+def test_session_start_injects_gh_account_context(db_conn, tmp_path):
+    repo = tmp_path / "work-repo"
+    repo.mkdir()
+    _register_repo(db_conn, str(repo), "work-acct")
+
+    out = hooks._handle_session_start(
+        {
+            "session_id": "sess-gh",
+            "cwd": str(repo),
+            "hook_event_name": "SessionStart",
+        }
+    )
+
+    assert out is not None
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "work-acct" in ctx
+    assert "GH_TOKEN" in ctx
+    tags = effective_tags(get_overrides_map(db_conn)["sess-gh"])
+    assert "gh:work-acct" in tags
+
+
+def test_session_start_returns_none_when_no_mapping(db_conn, tmp_path):
+    repo = tmp_path / "unmapped-repo"
+    repo.mkdir()
+
+    out = hooks._handle_session_start(
+        {
+            "session_id": "sess-plain",
+            "cwd": str(repo),
+            "hook_event_name": "SessionStart",
+        }
+    )
+
+    assert out is None
+    tags = effective_tags(get_overrides_map(db_conn)["sess-plain"])
+    assert not any(t.startswith("gh:") for t in tags)
+
+
+def test_session_start_rereads_mapping_on_each_call(db_conn, tmp_path):
+    repo = tmp_path / "shifting-repo"
+    repo.mkdir()
+    _register_repo(db_conn, str(repo), "acct-a")
+
+    out1 = hooks._handle_session_start(
+        {"session_id": "s1", "cwd": str(repo), "hook_event_name": "SessionStart"}
+    )
+    assert "acct-a" in out1["hookSpecificOutput"]["additionalContext"]
+
+    # Flip the mapping in the DB — no reinstall, no restart — and run again.
+    db_conn.execute("UPDATE repo_paths SET gh_account=? WHERE path=?", ("acct-b", str(repo)))
+    db_conn.commit()
+
+    out2 = hooks._handle_session_start(
+        {"session_id": "s2", "cwd": str(repo), "hook_event_name": "SessionStart"}
+    )
+    assert "acct-b" in out2["hookSpecificOutput"]["additionalContext"]

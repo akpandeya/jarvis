@@ -132,6 +132,35 @@ def apply_patch(
     return _load_row(conn, session_id) or {}
 
 
+def add_pr_link(conn: sqlite3.Connection, session_id: str, repo: str, number: int) -> bool:
+    """Append (repo, number) to pr_links + add the corresponding pr: tag.
+
+    Idempotent: returns True when the link was newly added, False if already
+    present. Both the hook and the backfill route through this.
+    """
+    apply_patch(conn, session_id, add_tags=[f"pr:{repo}#{number}"])
+    row = conn.execute(
+        "SELECT pr_links FROM claude_session_overrides WHERE session_id=?",
+        (session_id,),
+    ).fetchone()
+    existing: list[dict[str, Any]] = []
+    if row and row["pr_links"]:
+        try:
+            existing = json.loads(row["pr_links"]) or []
+        except json.JSONDecodeError:
+            existing = []
+    key = {"repo": repo, "number": int(number)}
+    if key in existing:
+        return False
+    existing.append(key)
+    conn.execute(
+        "UPDATE claude_session_overrides SET pr_links=?, updated_at=? WHERE session_id=?",
+        (json.dumps(existing), _now(), session_id),
+    )
+    conn.commit()
+    return True
+
+
 def set_auto(
     conn: sqlite3.Connection,
     session_id: str,

@@ -664,6 +664,39 @@ def api_sessions(
             }
         )
 
+    # Enrich pr_links with the correct gh account + full URL so the UI can
+    # route clicks through /api/open-url (which opens the matching Firefox
+    # profile). Without this, opening a PR from a work repo would pollute
+    # the default profile's history and fail to auth.
+    if out:
+        repo_account_map: dict[str, str] = {}
+        owner_account_map: dict[str, str] = {}
+        for r in list_repo_paths(conn):
+            if not r.get("gh_account"):
+                continue
+            full_repo = _remote_for_local_repo(str(Path(r["path"]).expanduser()))
+            if full_repo:
+                repo_account_map[full_repo] = r["gh_account"]
+                owner = full_repo.split("/")[0]
+                owner_account_map.setdefault(owner, r["gh_account"])
+        for item in out:
+            enriched = []
+            for link in item["pr_links"]:
+                repo = link.get("repo") or ""
+                number = link.get("number")
+                owner = repo.split("/")[0] if "/" in repo else repo
+                enriched.append(
+                    {
+                        "repo": repo,
+                        "number": number,
+                        "gh_account": repo_account_map.get(repo)
+                        or owner_account_map.get(owner)
+                        or None,
+                        "pr_url": f"https://github.com/{repo}/pull/{number}",
+                    }
+                )
+            item["pr_links"] = enriched
+
     # collect all tags present in effective sets for filter UI
     all_tags_set: set[str] = set()
     for item in out:

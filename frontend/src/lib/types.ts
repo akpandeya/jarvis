@@ -13,6 +13,8 @@ export interface Session {
 export interface PrLink {
   repo: string;
   number: number;
+  gh_account?: string | null;
+  pr_url: string;
 }
 
 export interface ClaudeSession {
