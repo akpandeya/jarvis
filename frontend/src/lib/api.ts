@@ -156,10 +156,66 @@ export const api = {
     req<PendingCountResponse>("/api/prs/pending-count"),
 
   // Side-effect endpoints
-  openUrl: (url: string, gh_account?: string) =>
-    req<OkResponse>("/api/open-url", {
+  openUrl: (url: string, opts?: string | { gh_account?: string; jira_host?: string }) => {
+    // Backward compatibility: positional gh_account string still works.
+    const o = typeof opts === "string" ? { gh_account: opts } : (opts ?? {});
+    return req<OkResponse>("/api/open-url", {
       method: "POST",
-      body: form({ url, gh_account }),
+      body: form({
+        url,
+        gh_account: o.gh_account,
+        jira_host: o.jira_host,
+      }),
+    });
+  },
+
+  // Settings
+  settingsJiraProfiles: () =>
+    req<{
+      installed: boolean;
+      hosts: string[];
+      mapping: Record<string, string>;
+      profiles: { name: string; path: string }[];
+    }>("/api/settings/jira-profiles"),
+  setJiraProfile: (host: string, profile: string) =>
+    req<{
+      installed: boolean;
+      hosts: string[];
+      mapping: Record<string, string>;
+      profiles: { name: string; path: string }[];
+    }>(`/api/settings/jira-profile/${encodeURIComponent(host)}`, {
+      method: "POST",
+      body: form({ profile }),
+    }),
+  settingsBrowserProfiles: () =>
+    req<{
+      installed: boolean;
+      profiles: { name: string; path: string }[];
+      accounts: Record<string, string>;
+    }>("/api/settings/browser-profiles"),
+  setBrowserProfile: (account: string, profile: string) =>
+    req<{
+      installed: boolean;
+      profiles: { name: string; path: string }[];
+      accounts: Record<string, string>;
+    }>(`/api/settings/browser-profile/${encodeURIComponent(account)}`, {
+      method: "POST",
+      body: form({ profile }),
+    }),
+  settingsGcalAccountMap: () =>
+    req<{
+      gh_accounts: string[];
+      gcal_accounts: string[];
+      mapping: Record<string, string>;
+    }>("/api/settings/gcal-account-map"),
+  setGcalAccount: (calAccount: string, profile: string) =>
+    req<{
+      gh_accounts: string[];
+      gcal_accounts: string[];
+      mapping: Record<string, string>;
+    }>(`/api/settings/gcal-account/${encodeURIComponent(calAccount)}`, {
+      method: "POST",
+      body: form({ profile }),
     }),
 };
 

@@ -195,15 +195,27 @@ def _firefox_profiles() -> list[dict]:
     ]
 
 
-def _profile_for_account(conn, account: str | None) -> str | None:
-    if not account:
-        return None
-    profile = kv_get(conn, f"browser_profile:{account}")
-    if profile:
-        return profile
-    gh_account = kv_get(conn, f"gcal_gh_account:{account}")
-    if gh_account:
-        return kv_get(conn, f"browser_profile:{gh_account}")
+def _profile_for_account(conn, account: str | None, jira_host: str | None = None) -> str | None:
+    """Resolve a Firefox profile path for an open-url request.
+
+    Lookup order:
+      1. browser_profile:<account>           — direct gh account mapping
+      2. gcal_gh_account:<account> → browser_profile:<gh>   — gcal fallback
+      3. jira_profile:<jira_host>            — Jira host mapping
+    """
+    if account:
+        profile = kv_get(conn, f"browser_profile:{account}")
+        if profile:
+            return profile
+        gh_account = kv_get(conn, f"gcal_gh_account:{account}")
+        if gh_account:
+            profile = kv_get(conn, f"browser_profile:{gh_account}")
+            if profile:
+                return profile
+    if jira_host:
+        profile = kv_get(conn, f"jira_profile:{jira_host}")
+        if profile:
+            return profile
     return None
 
 
@@ -735,6 +747,10 @@ def api_upcoming():
     _attach_gh_accounts(conn, top_prs)
     available_models = _claude_models()
     review_model = _resolve_review_model("")
+
+    from jarvis.memory import _group_sprint_tickets
+
+    active_sprints = _group_sprint_tickets(conn)
     conn.close()
 
     return {
@@ -742,6 +758,7 @@ def api_upcoming():
         "today_label": _today.strftime("%A, %B %-d"),
         "meetings": meetings,
         "top_prs": top_prs,
+        "active_sprints": active_sprints,
         "review_model": review_model,
         "available_models": available_models,
     }
@@ -1234,9 +1251,13 @@ def api_pr_reply(repo_encoded: str, pr_number: int, comment_id: int, body: str =
 
 
 @app.post("/api/open-url")
-def api_open_url(url: str = Form(...), gh_account: str = Form("")):
+def api_open_url(
+    url: str = Form(...),
+    gh_account: str = Form(""),
+    jira_host: str = Form(""),
+):
     conn = get_db()
-    profile_path = _profile_for_account(conn, gh_account or None)
+    profile_path = _profile_for_account(conn, gh_account or None, jira_host=jira_host or None)
     conn.close()
     if _firefox_installed() and profile_path:
         base = Path.home() / "Library/Application Support/Firefox"
@@ -1247,7 +1268,7 @@ def api_open_url(url: str = Form(...), gh_account: str = Form("")):
         )
     else:
         subprocess.Popen(["open", url])
-    logger.info("open_url account=%s url=%.80s", gh_account, url)
+    logger.info("open_url gh_account=%s jira_host=%s url=%.80s", gh_account, jira_host, url)
     return {"ok": True}
 
 
@@ -1386,6 +1407,32 @@ def api_settings_gcal_account_set(cal_account: str, profile: str = Form("")):
     kv_set(conn, f"gcal_gh_account:{cal_account}", profile)
     conn.close()
     return api_settings_gcal_account_map()
+
+
+@app.get("/api/settings/jira-profiles")
+def api_settings_jira_profiles():
+    """Map Jira hosts → Firefox profiles for URL routing."""
+    from jarvis.db import list_jira_board_subs
+
+    conn = get_db()
+    hosts = sorted({sub["host"] for sub in list_jira_board_subs(conn)})
+    mapping = {h: kv_get(conn, f"jira_profile:{h}") or "" for h in hosts}
+    conn.close()
+    profiles = _firefox_profiles() if _firefox_installed() else []
+    return {
+        "installed": _firefox_installed(),
+        "hosts": hosts,
+        "mapping": mapping,
+        "profiles": profiles,
+    }
+
+
+@app.post("/api/settings/jira-profile/{host}")
+def api_settings_jira_profile_set(host: str, profile: str = Form("")):
+    conn = get_db()
+    kv_set(conn, f"jira_profile:{host}", profile)
+    conn.close()
+    return api_settings_jira_profiles()
 
 
 # ---------------------------------------------------------------------------
