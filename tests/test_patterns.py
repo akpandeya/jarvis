@@ -71,11 +71,15 @@ def test_day_of_week_all_7_days(db):
 @pytest.mark.spec("patterns.F3")
 @pytest.mark.spec("patterns.F4")
 def test_context_switches_counts_project_changes(db):
-    base = _recent(2)
+    # Anchor all three events well inside a single local date so the
+    # day-boundary doesn't split them across two `daily` buckets (which
+    # would drop the inter-bucket switch from total=2 to total≤1).
+    now = datetime.now()
+    base = datetime(now.year, now.month, now.day, 12, 0, 0)
     _event(db, base, project="alpha")
     _event(db, base + timedelta(minutes=10), project="beta")
     _event(db, base + timedelta(minutes=20), project="alpha")
-    result = context_switches(db, days=1)
+    result = context_switches(db, days=2)
     assert result["total"] >= 2
 
 
