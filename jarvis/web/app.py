@@ -370,6 +370,44 @@ def _resolve_review_model(model: str) -> str:
     return model or cfg_model
 
 
+def _attach_authoring_sessions(conn, subs: list[dict]) -> list[dict]:
+    """Attach up to 5 authoring Claude session IDs per PR, newest first.
+
+    A session is "authoring" when its overrides row has `pr:<repo>#<n>` in
+    auto_tags (set by the PostToolUse hook on `gh pr create` or by
+    `jarvis sessions backfill`). Ordered by the session event's last_active.
+    """
+    if not subs:
+        return subs
+    rows = conn.execute(
+        """SELECT json_extract(e.metadata,'$.session_id') AS session_id,
+                  COALESCE(json_extract(e.metadata,'$.last_message_at'), e.happened_at) AS last_active,
+                  o.auto_tags AS auto_tags
+           FROM events e
+           JOIN claude_session_overrides o
+                ON json_extract(e.metadata,'$.session_id') = o.session_id
+           WHERE e.source = 'claude_sessions'
+             AND o.auto_tags LIKE '%"pr:%'"""
+    ).fetchall()
+    by_pr: dict[str, list[tuple[str, str]]] = {}
+    for r in rows:
+        try:
+            tags = json.loads(r["auto_tags"] or "[]")
+        except json.JSONDecodeError:
+            continue
+        for tag in tags:
+            if not tag.startswith("pr:"):
+                continue
+            by_pr.setdefault(tag[3:], []).append((r["last_active"] or "", r["session_id"]))
+    for key in by_pr:
+        by_pr[key].sort(reverse=True)
+    for s in subs:
+        key = f"{s['repo']}#{s['pr_number']}"
+        ids = [sid for _, sid in by_pr.get(key, [])][:5]
+        s["authoring_session_ids"] = ids
+    return subs
+
+
 def _attach_gh_accounts(conn, subs: list[dict]) -> list[dict]:
     """Mutate subs in-place to add a gh_account field based on repo_paths config."""
     repo_account_map: dict[str, str] = {}
@@ -934,6 +972,10 @@ def api_prs(
     _attach_gh_accounts(conn, pending)
     _attach_gh_accounts(conn, later)
     _attach_gh_accounts(conn, dismissed)
+    _attach_authoring_sessions(conn, watching)
+    _attach_authoring_sessions(conn, pending)
+    _attach_authoring_sessions(conn, later)
+    _attach_authoring_sessions(conn, dismissed)
 
     all_repos = sorted({s["repo"] for s in watching})
     all_authors = sorted({s["author"] for s in watching if s.get("author")})
@@ -1250,6 +1292,12 @@ def api_prs_review(repo_encoded: str, pr_number: int, model: str = Form("")):
 
     new_session_id = str(uuid_mod.uuid4())
     set_pr_chat_session(conn, repo, pr_number, new_session_id)
+    # Tag review sessions as pr-review:<repo>#<n> so the Sessions page can
+    # segregate them from regular conversations and the PR card can jump
+    # straight to the review later.
+    from jarvis.sessions_tags import apply_patch
+
+    apply_patch(conn, new_session_id, add_tags=[f"pr-review:{repo}#{pr_number}"])
     kv_set(
         conn,
         f"review_prompt:{new_session_id}",

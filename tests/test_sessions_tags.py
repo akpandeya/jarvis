@@ -105,6 +105,15 @@ def test_apply_patch_remove_auto_tag_goes_to_removed(conn):
     assert "repo:jarvis" in effective_tags(row)
 
 
+def test_apply_patch_pr_review_tag_lands_in_effective(conn):
+    # This is the tag the /api/prs/.../review endpoint adds when it spawns a
+    # new review session. Make sure effective_tags surfaces it so the
+    # Sessions page can split review conversations from regular ones.
+    apply_patch(conn, "review-1", add_tags=["pr-review:me/jarvis#5"])
+    row = get_overrides_map(conn)["review-1"]
+    assert "pr-review:me/jarvis#5" in effective_tags(row)
+
+
 def test_apply_patch_archive_roundtrip(conn):
     _make_session(conn, "s1", project="jarvis", branch="main", cwd="/x")
     apply_patch(conn, "s1", archived=True)
