@@ -168,6 +168,20 @@ def run_install() -> None:
     console.print()
     setup_profiles(console=console, interactive=True)
 
+    # Claude Code hooks
+    console.print()
+    if typer.confirm(
+        "Install Claude Code hooks so jarvis auto-tags sessions (repo, PRs)?",
+        default=True,
+    ):
+        from jarvis.hooks import install_hooks
+
+        added = install_hooks()
+        if added:
+            console.print(f"[green]✓[/green] Claude hooks installed: {', '.join(added)}")
+        else:
+            console.print("[dim]Claude hooks already installed.[/dim]")
+
     # 6. Autostart
     console.print()
     if typer.confirm("Start Jarvis automatically at login (menu bar + background agents)?"):

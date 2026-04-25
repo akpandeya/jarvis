@@ -132,6 +132,13 @@ def ingest_all(
     if merges:
         _log(f"  [blue]resolved[/blue] {merges} duplicate entities")
 
+    # Re-derive auto tags + PR links for Claude sessions
+    from jarvis.sessions_tags import correlate_claude_sessions
+
+    tagged = correlate_claude_sessions(conn)
+    if tagged:
+        _log(f"  [blue]tagged[/blue] {tagged} claude sessions")
+
     # Collect computer-wide activity
     if source_filter in (None, "activity"):
         from jarvis.activity import collect_all

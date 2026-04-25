@@ -17,7 +17,7 @@ from datetime import time as dtime
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Query
+from fastapi import Body, FastAPI, Form, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -576,25 +576,140 @@ def api_ingest(days: int = Query(7)):
 @app.get("/api/sessions")
 def api_sessions(
     project: str | None = Query(None),
-    limit: int = Query(20),
+    repo: str | None = Query(None),
+    tag: list[str] | None = Query(None),
+    archived: str = Query("0"),
+    q: str | None = Query(None),
+    limit: int = Query(50),
+    offset: int = Query(0),
 ):
+    from jarvis.sessions_tags import effective_tags, get_overrides_map
+
     conn = get_db()
     sessions = list_sessions(conn, project=project, limit=limit)
-    claude_sessions = conn.execute(
-        """SELECT title, happened_at,
-                  json_extract(metadata,'$.session_id') as session_id,
-                  json_extract(metadata,'$.branch') as branch,
-                  json_extract(metadata,'$.cwd') as cwd,
-                  json_extract(metadata,'$.turns') as turns,
-                  COALESCE(json_extract(metadata,'$.last_message_at'), happened_at) as last_active
-           FROM events WHERE source='claude_sessions'
-           ORDER BY last_active DESC LIMIT 50"""
+
+    where = ["source='claude_sessions'"]
+    params: list = []
+    if repo:
+        where.append("project = ?")
+        params.append(repo)
+    rows = conn.execute(
+        f"""SELECT title, happened_at, project,
+                   json_extract(metadata,'$.session_id') as session_id,
+                   json_extract(metadata,'$.branch') as branch,
+                   json_extract(metadata,'$.cwd') as cwd,
+                   json_extract(metadata,'$.turns') as turns,
+                   COALESCE(json_extract(metadata,'$.last_message_at'), happened_at) as last_active
+            FROM events WHERE {" AND ".join(where)}
+            ORDER BY last_active DESC""",
+        params,
     ).fetchall()
+
+    overrides = get_overrides_map(conn)
+    all_projects = sorted({r["project"] for r in rows if r["project"]})
+
+    wanted_tags = set(tag or [])
+    needle = (q or "").strip().lower()
+
+    out: list[dict] = []
+    seen_sessions: set[str] = set()
+    for r in rows:
+        sid = r["session_id"]
+        if sid:
+            if sid in seen_sessions:
+                continue
+            seen_sessions.add(sid)
+        ov = overrides.get(sid or "") or {}
+        is_archived = bool(ov.get("archived"))
+        if archived == "0" and is_archived:
+            continue
+        if archived == "1" and not is_archived:
+            continue
+        tags = effective_tags(ov) if ov else []
+        # inject repo/jarvis fallback tags when there's no overrides row yet
+        if not ov:
+            if r["project"]:
+                tags.append(f"repo:{r['project']}")
+            if r["project"] == "jarvis" or (r["cwd"] and "/jarvis" in r["cwd"]):
+                tags.append("jarvis-involved")
+        if wanted_tags and not wanted_tags.issubset(set(tags)):
+            continue
+        display_title = ov.get("display_title") or r["title"]
+        if needle:
+            hay = f"{display_title} {' '.join(tags)}".lower()
+            if needle not in hay:
+                continue
+        import json as _json
+
+        pr_links = ov.get("pr_links")
+        if isinstance(pr_links, str):
+            try:
+                pr_links = _json.loads(pr_links)
+            except Exception:
+                pr_links = []
+        out.append(
+            {
+                "session_id": sid,
+                "title": r["title"],
+                "display_title": display_title,
+                "happened_at": r["happened_at"],
+                "last_active": r["last_active"],
+                "branch": r["branch"],
+                "cwd": r["cwd"],
+                "project": r["project"],
+                "turns": r["turns"],
+                "tags": tags,
+                "archived": is_archived,
+                "pr_links": pr_links or [],
+            }
+        )
+
+    # collect all tags present in effective sets for filter UI
+    all_tags_set: set[str] = set()
+    for item in out:
+        all_tags_set.update(item["tags"])
+
+    total = len(out)
+    paged = out[offset : offset + limit]
     conn.close()
     return {
         "sessions": [dict(s) for s in sessions],
-        "claude_sessions": [dict(r) for r in claude_sessions],
+        "claude_sessions": paged,
+        "total": total,
+        "projects": all_projects,
+        "all_tags": sorted(all_tags_set),
     }
+
+
+@app.patch("/api/claude-sessions/{session_id}")
+def api_claude_session_patch(session_id: str, body: dict = Body(...)):
+    from jarvis.sessions_tags import apply_patch, effective_tags
+
+    conn = get_db()
+    row = apply_patch(
+        conn,
+        session_id,
+        display_title=body.get("display_title"),
+        clear_display_title=body.get("clear_display_title", False),
+        archived=body.get("archived"),
+        add_tags=body.get("add_tags"),
+        remove_tags=body.get("remove_tags"),
+    )
+    conn.close()
+    return {
+        "session_id": session_id,
+        "display_title": row.get("display_title"),
+        "archived": bool(row.get("archived")),
+        "tags": effective_tags(row),
+    }
+
+
+@app.post("/api/claude-sessions/recorrelate")
+def api_claude_session_recorrelate():
+    from jarvis.sessions_tags import correlate_claude_sessions
+
+    updated = correlate_claude_sessions()
+    return {"updated": updated}
 
 
 # ---------------------------------------------------------------------------

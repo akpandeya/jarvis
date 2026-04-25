@@ -13,6 +13,12 @@ export const queryClient = new QueryClient({
 // Central registry of query keys. Mutations invalidate against these.
 export const keys = {
   sessions: ["sessions"] as const,
+  sessionsFiltered: (
+    repo: string | null,
+    tags: string[],
+    archived: string,
+    q: string | null,
+  ) => ["sessions", { repo, tags, archived, q }] as const,
   timeline: (days: number, source?: string | null, project?: string | null, page = 1) =>
     ["timeline", { days, source: source ?? null, project: project ?? null, page }] as const,
   search: (q: string) => ["search", q] as const,
