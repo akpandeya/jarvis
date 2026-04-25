@@ -86,7 +86,11 @@ jobs:
             --base main \
             --head "$BRANCH" \
             --label "chore")
-          # Enable auto-merge so it lands once CI passes
-          gh pr merge "$PR_URL" --auto --squash
+          # Prefer auto-merge; fall back to direct squash-merge when the PR
+          # is already CLEAN (no required checks pending — GitHub rejects
+          # enablePullRequestAutoMerge in that case).
+          if ! gh pr merge "$PR_URL" --auto --squash 2>/dev/null; then
+            gh pr merge "$PR_URL" --squash --delete-branch
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
