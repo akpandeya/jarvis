@@ -202,14 +202,16 @@ function SessionCard({ s }: { s: ClaudeSession }) {
         </div>
       </div>
       <div style={{ marginTop: "0.35rem", display: "flex", flexWrap: "wrap" }}>
-        {s.tags.map((t) => (
-          <TagChip
-            key={t}
-            label={t}
-            tone={tagTone(t)}
-            onRemove={() => patch.mutate({ remove_tags: [t] })}
-          />
-        ))}
+        {s.tags
+          .filter((t) => !t.startsWith("pr:"))
+          .map((t) => (
+            <TagChip
+              key={t}
+              label={t}
+              tone={tagTone(t)}
+              onRemove={() => patch.mutate({ remove_tags: [t] })}
+            />
+          ))}
         {s.pr_links.map((p) => (
           <button
             key={`${p.repo}#${p.number}`}
