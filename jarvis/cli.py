@@ -1233,6 +1233,33 @@ def menubar() -> None:
     main()
 
 
+# --- Claude sessions tooling (distinct from `jarvis session` snapshot commands) ---
+
+sessions_app = typer.Typer(
+    help="Tools for Claude Code sessions ingested from ~/.claude/projects/",
+)
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.command("backfill")
+def sessions_backfill() -> None:
+    """Mine Claude jsonl transcripts for `gh pr create` output and attach PR tags.
+
+    Real-time tagging uses the installed PostToolUse hook. This command covers
+    old sessions that existed before the hook was installed. Idempotent — safe
+    to re-run.
+    """
+    from jarvis.sessions_backfill import run_backfill
+
+    console.print("[bold]Scanning Claude transcripts for PR links...[/bold]")
+    summary = run_backfill()
+    console.print(
+        f"[green]Done.[/green] files={summary['files_scanned']}, "
+        f"sessions_touched={summary['sessions_touched']}, "
+        f"links_added={summary['links_added']}"
+    )
+
+
 @app.command("pr-monitor")
 def pr_monitor() -> None:
     """Check open PRs: explain CI failures, summarise reviews, auto-merge when green."""

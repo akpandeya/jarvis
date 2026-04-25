@@ -134,14 +134,44 @@ def _git_branch(cwd: str) -> str:
         return ""
 
 
-def _handle_session_start(payload: dict[str, Any]) -> None:
+def resolve_gh_account_for_cwd(conn: Any, cwd: str) -> str | None:
+    """Return the gh_account configured for whichever registered repo path
+    contains this cwd. Longest match wins (handles nested repos). The hook
+    re-reads this on every invocation, so UI changes to the mapping take
+    effect on the next SessionStart — no reinstall needed.
+    """
+    from jarvis.db import list_repo_paths
+
+    if not cwd:
+        return None
+    cwd_path = Path(cwd).expanduser().resolve()
+    best: tuple[int, str | None] | None = None
+    for row in list_repo_paths(conn):
+        acct = row.get("gh_account")
+        if not acct:
+            continue
+        try:
+            p = Path(row["path"]).expanduser().resolve()
+        except Exception:
+            continue
+        try:
+            cwd_path.relative_to(p)
+        except ValueError:
+            continue
+        depth = len(p.parts)
+        if best is None or depth > best[0]:
+            best = (depth, acct)
+    return best[1] if best else None
+
+
+def _handle_session_start(payload: dict[str, Any]) -> dict[str, Any] | None:
     from jarvis.db import get_db
     from jarvis.sessions_tags import apply_patch
 
     session_id = payload.get("session_id") or ""
     cwd = payload.get("cwd") or ""
     if not session_id or not cwd:
-        return
+        return None
 
     project = Path(cwd).name if cwd else None
     tags: list[str] = []
@@ -153,14 +183,32 @@ def _handle_session_start(payload: dict[str, Any]) -> None:
     if branch:
         tags.append(f"branch:{branch}")
 
-    if not tags:
-        return
     conn = get_db()
-    apply_patch(conn, session_id, add_tags=tags)
-    conn.close()
+    try:
+        gh_account = resolve_gh_account_for_cwd(conn, cwd)
+        if gh_account:
+            tags.append(f"gh:{gh_account}")
+        if tags:
+            apply_patch(conn, session_id, add_tags=tags)
+    finally:
+        conn.close()
+
+    if gh_account:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": (
+                    f"This repo is configured in Jarvis to use the GitHub account"
+                    f" '{gh_account}'. For any `gh` commands in this session,"
+                    f" prefix with `GH_TOKEN=$(gh auth token --user {gh_account})`"
+                    f" so you act as that identity instead of the default one."
+                ),
+            }
+        }
+    return None
 
 
-def _handle_post_tool_use(payload: dict[str, Any]) -> None:
+def _handle_post_tool_use(payload: dict[str, Any]) -> dict[str, Any] | None:
     if payload.get("tool_name") != "Bash":
         return
     tool_input = payload.get("tool_input") or {}
@@ -180,35 +228,14 @@ def _handle_post_tool_use(payload: dict[str, Any]) -> None:
         return
 
     from jarvis.db import get_db
-    from jarvis.sessions_tags import apply_patch
+    from jarvis.sessions_tags import add_pr_link
 
     conn = get_db()
-    apply_patch(conn, session_id, add_tags=[f"pr:{repo}#{number}"])
-    # also record pr_links on the row
-    import json as _json
-
-    row = conn.execute(
-        "SELECT pr_links FROM claude_session_overrides WHERE session_id=?",
-        (session_id,),
-    ).fetchone()
-    existing = []
-    if row and row["pr_links"]:
-        try:
-            existing = _json.loads(row["pr_links"])
-        except Exception:
-            existing = []
-    key = {"repo": repo, "number": number}
-    if key not in existing:
-        existing.append(key)
-        conn.execute(
-            "UPDATE claude_session_overrides SET pr_links=? WHERE session_id=?",
-            (_json.dumps(existing), session_id),
-        )
-        conn.commit()
+    add_pr_link(conn, session_id, repo, number)
     conn.close()
 
 
-def _handle_session_end(payload: dict[str, Any]) -> None:
+def _handle_session_end(payload: dict[str, Any]) -> dict[str, Any] | None:
     from jarvis.sessions_tags import correlate_claude_sessions
 
     correlate_claude_sessions()
@@ -235,8 +262,11 @@ def handle_stdin() -> int:
     if handler is None:
         return 0
     try:
-        handler(payload)
+        result = handler(payload)
     except Exception:
         # Never block Claude Code on our bookkeeping failures.
         return 0
+    if isinstance(result, dict):
+        sys.stdout.write(json.dumps(result))
+        sys.stdout.flush()
     return 0

@@ -211,13 +211,20 @@ function SessionCard({ s }: { s: ClaudeSession }) {
           />
         ))}
         {s.pr_links.map((p) => (
-          <a
+          <button
             key={`${p.repo}#${p.number}`}
-            href={`/prs?repo=${encodeURIComponent(p.repo)}`}
-            style={{ ...chip, textDecoration: "none" }}
+            onClick={() =>
+              api.openUrl(p.pr_url, { gh_account: p.gh_account ?? undefined })
+            }
+            style={{
+              ...chip,
+              cursor: "pointer",
+              background: "rgba(88,166,255,0.12)",
+            }}
+            title={p.gh_account ? `Open as ${p.gh_account}` : "Open PR"}
           >
             → {p.repo}#{p.number}
-          </a>
+          </button>
         ))}
         {addingTag ? (
           <form
