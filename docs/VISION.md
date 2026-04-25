@@ -65,6 +65,7 @@ Auto-update: once a PR merges, `jarvis update` pulls and reinstalls.
 - **Local embeddings**: `sqlite-vec` + sentence-transformers for semantic search without LLM calls
 - **Fully autonomous evolution**: Jarvis writes, tests, and proposes its own code changes based on usage signals
 - **PR monitor** (scheduled every 2h via launchd): polls all open PRs across all configured GitHub accounts; fires deterministic rules for CI failures and staging deploys; calls LLM only for review comment summaries
+- **Review → authoring loopback**: from a review conversation on my own PR, one click sends the enumerated fix-prompt into the authoring conversation via `/api/chat/stream` autostart, closing the loop without copy-paste
 
 ---
 
