@@ -132,6 +132,10 @@ export interface PrSubscription {
   priority: number;
   gh_account?: string;
   authoring_session_ids?: string[];
+  last_review_verdict?: string | null;
+  last_review_must_fix?: number | null;
+  last_review_nits?: number | null;
+  last_review_at?: string | null;
 }
 
 export interface ClaudeModel {

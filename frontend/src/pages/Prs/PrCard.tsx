@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "../../lib/api";
 import { queryClient, keys } from "../../lib/queryClient";
-import { CiBadge, ReviewBadge } from "./badges";
+import { CiBadge, ClaudeVerdictBadge, ReviewBadge } from "./badges";
 import { btnSm, btnSmPrimary } from "./buttons";
 import type { ClaudeModel, PrSubscription } from "../../lib/types";
 
@@ -104,6 +104,17 @@ export function PrCard({
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap", fontSize: "0.85em" }}>
           <span>
             <CiBadge status={pr.ci_status} /> &nbsp; <ReviewBadge decision={pr.review_decision} />
+            {pr.last_review_verdict && (
+              <>
+                {" "}
+                &nbsp;{" "}
+                <ClaudeVerdictBadge
+                  verdict={pr.last_review_verdict}
+                  mustFix={pr.last_review_must_fix}
+                  nits={pr.last_review_nits}
+                />
+              </>
+            )}
           </span>
           <button
             title="Refresh"
