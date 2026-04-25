@@ -114,13 +114,54 @@ def _group_sprint_tickets(conn) -> list[dict]:
     return out
 
 
+def _recent_nonsprint_jira(conn) -> list[dict]:
+    """Tickets tagged 'recent' that are NOT on any currently-watched sprint.
+
+    Surfaced separately from the sprint section so the user sees tickets
+    they've touched outside (or cross-team) without drowning in sprint lists.
+    """
+    rows = conn.execute(
+        "SELECT name, metadata FROM entities WHERE kind='jira_issue' AND metadata IS NOT NULL"
+    ).fetchall()
+
+    _DONE = {"done", "closed", "won't do"}
+    out: list[dict] = []
+    for r in rows:
+        meta = json.loads(r["metadata"])
+        tags = meta.get("source_tags") or []
+        if "recent" not in tags:
+            continue
+        if any(t.startswith("board:") for t in tags):
+            continue
+        status = (meta.get("status") or "").strip()
+        if status.lower() in _DONE:
+            continue
+        out.append(
+            {
+                "key": r["name"],
+                "status": status,
+                "summary": (meta.get("summary") or "").strip(),
+                "assignee": (meta.get("assignee") or "").strip(),
+                "issue_type": (meta.get("issue_type") or "").strip(),
+                "priority": (meta.get("priority") or "").strip(),
+                "url": meta.get("url") or "",
+            }
+        )
+    # Stable-ish order: by key descending so the most-recent PROJ-NNNN sit on top.
+    out.sort(key=lambda t: t["key"], reverse=True)
+    return out
+
+
 def _active_sprint_section(conn) -> str:
-    """Markdown "Active Sprints" block for the CLI briefing."""
+    """Markdown "Jira" block for the CLI briefing — sprints + recent tickets."""
     groups = _group_sprint_tickets(conn)
-    if not groups:
+    recent_only = _recent_nonsprint_jira(conn)
+    if not groups and not recent_only:
         return ""
 
-    out: list[str] = ["## Active Sprints"]
+    out: list[str] = ["## Jira"]
+    if groups:
+        out.append("### Active Sprints")
     for g in groups:
         header = f"### {g['nickname']}"
         if g["sprint_name"]:
@@ -145,6 +186,14 @@ def _active_sprint_section(conn) -> str:
                 out.append(f"- {t['key']} ({t['status']}) — {t['assignee']}")
             if n > 5:
                 out.append(f"- _…and {n - 5} more_")
+
+    if recent_only:
+        out.append("")
+        out.append(f"### Recent tickets (not on any watched sprint, {len(recent_only)})")
+        for t in recent_only[:10]:
+            out.append(f"- **{t['key']}** ({t['status']}) {t['summary']}".rstrip())
+        if len(recent_only) > 10:
+            out.append(f"- _…and {len(recent_only) - 10} more_")
     return "\n".join(out) + "\n"
 
 

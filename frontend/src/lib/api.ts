@@ -202,18 +202,20 @@ export const api = {
       method: "POST",
       body: form({ profile }),
     }),
-  settingsGcalAccountMap: () =>
+  settingsGcalProfiles: () =>
     req<{
-      gh_accounts: string[];
+      installed: boolean;
       gcal_accounts: string[];
       mapping: Record<string, string>;
-    }>("/api/settings/gcal-account-map"),
-  setGcalAccount: (calAccount: string, profile: string) =>
+      profiles: { name: string; path: string }[];
+    }>("/api/settings/gcal-profiles"),
+  setGcalProfile: (calAccount: string, profile: string) =>
     req<{
-      gh_accounts: string[];
+      installed: boolean;
       gcal_accounts: string[];
       mapping: Record<string, string>;
-    }>(`/api/settings/gcal-account/${encodeURIComponent(calAccount)}`, {
+      profiles: { name: string; path: string }[];
+    }>(`/api/settings/gcal-profile/${encodeURIComponent(calAccount)}`, {
       method: "POST",
       body: form({ profile }),
     }),

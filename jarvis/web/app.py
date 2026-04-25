@@ -748,9 +748,10 @@ def api_upcoming():
     available_models = _claude_models()
     review_model = _resolve_review_model("")
 
-    from jarvis.memory import _group_sprint_tickets
+    from jarvis.memory import _group_sprint_tickets, _recent_nonsprint_jira
 
     active_sprints = _group_sprint_tickets(conn)
+    recent_jira = _recent_nonsprint_jira(conn)
     conn.close()
 
     return {
@@ -759,6 +760,7 @@ def api_upcoming():
         "meetings": meetings,
         "top_prs": top_prs,
         "active_sprints": active_sprints,
+        "recent_jira": recent_jira,
         "review_model": review_model,
         "available_models": available_models,
     }
@@ -1386,27 +1388,39 @@ def api_settings_browser_profile_set(account: str, profile: str = Form("")):
     return api_settings_browser_profiles()
 
 
-@app.get("/api/settings/gcal-account-map")
-def api_settings_gcal_account_map():
+@app.get("/api/settings/gcal-profiles")
+def api_settings_gcal_profiles():
+    """Map Google Calendar account name → Firefox profile path.
+
+    Supersedes the older gcal_gh_account hop — meeting/calendar links now
+    open directly in the mapped profile without needing a gh account
+    intermediary. Stored as `browser_profile:<cal_account>` in kv, which is
+    the same prefix `_profile_for_account` already checks at step 1.
+    """
     from jarvis.config import JarvisConfig
 
-    gh_accounts = _gh_accounts()
     try:
         gcal_accounts = [a.name for a in JarvisConfig.load().gcal.accounts]
     except Exception:
         gcal_accounts = []
     conn = get_db()
-    mapping = {cal: kv_get(conn, f"gcal_gh_account:{cal}") or "" for cal in gcal_accounts}
+    mapping = {cal: kv_get(conn, f"browser_profile:{cal}") or "" for cal in gcal_accounts}
     conn.close()
-    return {"gh_accounts": gh_accounts, "gcal_accounts": gcal_accounts, "mapping": mapping}
+    profiles = _firefox_profiles() if _firefox_installed() else []
+    return {
+        "installed": _firefox_installed(),
+        "gcal_accounts": gcal_accounts,
+        "mapping": mapping,
+        "profiles": profiles,
+    }
 
 
-@app.post("/api/settings/gcal-account/{cal_account}")
-def api_settings_gcal_account_set(cal_account: str, profile: str = Form("")):
+@app.post("/api/settings/gcal-profile/{cal_account}")
+def api_settings_gcal_profile_set(cal_account: str, profile: str = Form("")):
     conn = get_db()
-    kv_set(conn, f"gcal_gh_account:{cal_account}", profile)
+    kv_set(conn, f"browser_profile:{cal_account}", profile)
     conn.close()
-    return api_settings_gcal_account_map()
+    return api_settings_gcal_profiles()
 
 
 @app.get("/api/settings/jira-profiles")

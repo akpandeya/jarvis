@@ -197,20 +197,26 @@ function JiraPanel() {
 
 function GcalPanel() {
   const { data, isLoading } = useQuery({
-    queryKey: keys.settingsGcalAccountMap,
-    queryFn: api.settingsGcalAccountMap,
+    queryKey: keys.settingsGcalProfiles,
+    queryFn: api.settingsGcalProfiles,
   });
   const save = useMutation({
-    mutationFn: ({ calAccount, gh }: { calAccount: string; gh: string }) =>
-      api.setGcalAccount(calAccount, gh),
+    mutationFn: ({ calAccount, profile }: { calAccount: string; profile: string }) =>
+      api.setGcalProfile(calAccount, profile),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: keys.settingsGcalAccountMap });
+      queryClient.invalidateQueries({ queryKey: keys.settingsGcalProfiles });
       toast.success("Saved");
     },
     onError: () => toast.error("Failed to save"),
   });
 
   if (isLoading || !data) return <p>Loading…</p>;
+  if (!data.installed)
+    return (
+      <p style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>
+        Firefox not installed.
+      </p>
+    );
   if (data.gcal_accounts.length === 0) {
     return (
       <p style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>
@@ -226,25 +232,11 @@ function GcalPanel() {
           key={cal}
           label={cal}
           right={
-            <select
+            <ProfileSelect
               value={data.mapping[cal] ?? ""}
-              onChange={(e) => save.mutate({ calAccount: cal, gh: e.target.value })}
-              style={{
-                fontSize: "0.85em",
-                padding: "0.2rem 0.4rem",
-                background: "var(--color-bg-elev)",
-                color: "var(--color-text)",
-                border: "1px solid var(--color-border)",
-                borderRadius: 4,
-              }}
-            >
-              <option value="">— none —</option>
-              {data.gh_accounts.map((gh) => (
-                <option key={gh} value={gh}>
-                  {gh}
-                </option>
-              ))}
-            </select>
+              profiles={data.profiles}
+              onChange={(profile) => save.mutate({ calAccount: cal, profile })}
+            />
           }
         />
       ))}
@@ -277,8 +269,8 @@ export default function Settings() {
       </SectionCard>
 
       <SectionCard
-        title="Calendar account → GitHub account"
-        subtitle="Meeting join links on Focus use the mapped gh account → its Firefox profile."
+        title="Calendar account → Firefox profile"
+        subtitle="Meeting join links on Focus open in the mapped profile."
       >
         <GcalPanel />
       </SectionCard>

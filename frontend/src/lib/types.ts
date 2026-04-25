@@ -132,6 +132,7 @@ export interface UpcomingResponse {
   meetings: Meeting[];
   top_prs: PrSubscription[];
   active_sprints: ActiveSprint[];
+  recent_jira: JiraTicket[];
   review_model: string;
   available_models: ClaudeModel[];
 }

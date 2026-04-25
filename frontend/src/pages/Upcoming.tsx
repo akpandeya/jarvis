@@ -279,8 +279,6 @@ export default function Upcoming() {
         <span style={{ fontSize: "0.85em", color: "var(--color-muted)" }}>{data.today_label}</span>
       </div>
 
-      <ActiveSprintSection sprints={data.active_sprints ?? []} />
-
       <div
         style={{
           display: "grid",
@@ -350,6 +348,11 @@ export default function Upcoming() {
           )}
         </aside>
       </div>
+
+      <ActiveSprintSection
+        sprints={data.active_sprints ?? []}
+        recent={data.recent_jira ?? []}
+      />
     </>
   );
 }
